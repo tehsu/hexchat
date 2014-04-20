@@ -66,15 +66,6 @@
 #define BIG_STR_TO_INT(x) strtoul(x,NULL,10)
 #endif
 
-/* This is practically copy-paste from gstdio.h.
- * GStatBuf was added in 2.26. On Win32 we already use that,
- * so we only gotta check this on Unix */
-#ifndef WIN32
-#if !GLIB_CHECK_VERSION(2,26,0)
-typedef struct stat GStatBuf;
-#endif
-#endif
-
 static char *dcctypes[] = { "SEND", "RECV", "CHAT", "CHAT" };
 
 struct dccstat_info dccstat[] = {
@@ -236,6 +227,15 @@ is_dcc (struct DCC *dcc)
 	return FALSE;
 }
 
+gboolean
+is_dcc_completed (struct DCC *dcc)
+{
+	if (dcc != NULL)
+		return (dcc->dccstat == STAT_FAILED || dcc->dccstat == STAT_DONE || dcc->dccstat == STAT_ABORTED);
+
+	return FALSE;
+}
+
 /* this is called from hexchat.c:hexchat_misc_checks() every 1 second. */
 
 void
@@ -394,7 +394,7 @@ dcc_close (struct DCC *dcc, int dccstat, int destroy)
 
 		if(dccstat == STAT_DONE)
 		{
-			/* if we just completed a dcc recieve, move the */
+			/* if we just completed a dcc receive, move the */
 			/* completed file to the completed directory */
 			if(dcc->type == TYPE_RECV)
 			{			
@@ -518,6 +518,7 @@ dcc_chat_line (struct DCC *dcc, char *line)
 	int len;
 	gsize utf_len;
 	char portbuf[32];
+	message_tags_data no_tags = MESSAGE_TAGS_DATA_INIT;
 
 	len = strlen (line);
 	if (dcc->serv->using_cp1255)
@@ -556,7 +557,7 @@ dcc_chat_line (struct DCC *dcc, char *line)
 	for (i = 5; i < PDIWORDS; i++)
 		word[i] = "\000";
 
-	ret = plugin_emit_print (sess, word);
+	ret = plugin_emit_print (sess, word, 0);
 
 	/* did the plugin close it? */
 	if (!g_slist_find (dcc_list, dcc))
@@ -585,10 +586,11 @@ dcc_chat_line (struct DCC *dcc, char *line)
 		po = strchr (line + 8, '\001');
 		if (po)
 			po[0] = 0;
-		inbound_action (sess, dcc->serv->nick, dcc->nick, "", line + 8, FALSE, FALSE);
+		inbound_action (sess, dcc->serv->nick, dcc->nick, "", line + 8, FALSE,
+							 FALSE, &no_tags);
 	} else
 	{
-		inbound_privmsg (dcc->serv, dcc->nick, "", line, FALSE);
+		inbound_privmsg (dcc->serv, dcc->nick, "", line, FALSE, &no_tags);
 	}
 	if (utf)
 		g_free (utf);
@@ -1803,7 +1805,10 @@ dcc_send (struct session *sess, char *to, char *file, int maxcps, int passive)
 
 	dcc = new_dcc ();
 	if (!dcc)
+	{
+		free (file);
 		return;
+	}
 	dcc->file = file;
 	dcc->maxcps = maxcps;
 
@@ -2384,8 +2389,8 @@ dcc_add_file (session *sess, char *file, DCC_SIZE size, int port, char *nick, gu
 }
 
 void
-handle_dcc (struct session *sess, char *nick, char *word[],
-				char *word_eol[])
+handle_dcc (struct session *sess, char *nick, char *word[], char *word_eol[],
+				const message_tags_data *tags_data)
 {
 	char tbuf[512];
 	struct DCC *dcc;
@@ -2481,8 +2486,9 @@ handle_dcc (struct session *sess, char *nick, char *word[],
 				dcc->serv->p_ctcp (dcc->serv, dcc->nick, tbuf);
 			}
 			sprintf (tbuf, "%"DCC_SFMT, dcc->pos);
-			EMIT_SIGNAL (XP_TE_DCCRESUMEREQUEST, sess, nick,
-							 file_part (dcc->file), tbuf, NULL, 0);
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_DCCRESUMEREQUEST, sess, nick,
+										  file_part (dcc->file), tbuf, NULL, 0,
+										  tags_data->timestamp);
 		}
 		return;
 	}
@@ -2552,8 +2558,9 @@ handle_dcc (struct session *sess, char *nick, char *word[],
 
 	} else
 	{
-		EMIT_SIGNAL (XP_TE_DCCGENERICOFFER, sess->server->front_session,
-						 word_eol[4] + 2, nick, NULL, NULL, 0);
+		EMIT_SIGNAL_TIMESTAMP (XP_TE_DCCGENERICOFFER, sess->server->front_session,
+									  word_eol[4] + 2, nick, NULL, NULL, 0,
+									  tags_data->timestamp);
 	}
 }
 

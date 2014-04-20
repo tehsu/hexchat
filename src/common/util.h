@@ -1,3 +1,22 @@
+/* HexChat
+ * Copyright (C) 1998-2010 Peter Zelezny.
+ * Copyright (C) 2009-2013 Berke Viktor.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ */
+
 /************************************************************************
  *    This technique was borrowed in part from the source code to 
  *    ircd-hybrid-5.3 to implement case-insensitive string matches which
@@ -14,7 +33,6 @@
 #ifndef HEXCHAT_UTIL_H
 #define HEXCHAT_UTIL_H
 
-#include "strlutil.h"
 #define rfc_tolower(c) (rfc_tolowertab[(unsigned char)(c)])
 
 extern const unsigned char rfc_tolowertab[];
@@ -47,7 +65,6 @@ int waitline (int sok, char *buf, int bufsize, int);
 #ifdef WIN32
 int waitline2 (GIOChannel *source, char *buf, int bufsize);
 int get_cpu_arch (void);
-int find_font (const char *fontname);
 #else
 #define waitline2(source,buf,size) waitline(serv->childread,buf,size,0)
 #endif
@@ -59,9 +76,10 @@ guint32 str_ihash (const unsigned char *key);
 void safe_strcpy (char *dest, const char *src, int bytes_left);
 void canonalize_key (char *key);
 int portable_mode ();
-int hextray_mode ();
 int unity_mode ();
-GSList *get_subdirs (const char *path);
-char *encode_sasl_pass (char *user, char *pass);
-
+char *encode_sasl_pass_plain (char *user, char *pass);
+char *encode_sasl_pass_blowfish (char *user, char *pass, char *data);
+char *encode_sasl_pass_aes (char *user, char *pass, char *data);
+char *challengeauth_response (char *username, char *password, char *challenge);
+size_t strftime_validated (char *dest, size_t destsize, const char *format, const struct tm *time);
 #endif

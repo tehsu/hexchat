@@ -28,22 +28,6 @@
 #include "../common/inet.h"
 #include "fe-gtk.h"
 
-#include <gtk/gtkhbbox.h>
-#include <gtk/gtkhbox.h>
-#include <gtk/gtklabel.h>
-#include <gtk/gtkstock.h>
-#include <gtk/gtkmessagedialog.h>
-#include <gtk/gtktable.h>
-#include <gtk/gtktreeview.h>
-#include <gtk/gtkexpander.h>
-#include <gtk/gtkliststore.h>
-#include <gtk/gtktreeselection.h>
-#include <gtk/gtkcellrendererpixbuf.h>
-#include <gtk/gtkcellrenderertext.h>
-#include <gtk/gtkcheckmenuitem.h>
-#include <gtk/gtkradiobutton.h>
-#include <gtk/gtkversion.h>
-
 #include "../common/hexchat.h"
 #include "../common/hexchatc.h"
 #include "../common/fe.h"
@@ -94,6 +78,7 @@ struct dccwindow
 	GtkWidget *accept_button;
 	GtkWidget *resume_button;
 	GtkWidget *open_button;
+	GtkWidget *clear_button; /* clears aborted and completed requests */	
 
 	GtkWidget *file_label;
 	GtkWidget *address_label;
@@ -118,26 +103,15 @@ static short view_mode;	/* 1=download 2=upload 3=both */
 #define VIEW_UPLOAD 2
 #define VIEW_BOTH 3
 
-#define KILOBYTE 1024
-#define MEGABYTE (KILOBYTE * 1024)
-#define GIGABYTE (MEGABYTE * 1024)
-
 
 static void
 proper_unit (DCC_SIZE size, char *buf, int buf_len)
 {
-	if (size <= KILOBYTE)
-	{
-		snprintf (buf, buf_len, "%"DCC_SFMT"B", size);
-	}
-	else if (size > KILOBYTE && size <= MEGABYTE)
-	{
-		snprintf (buf, buf_len, "%"DCC_SFMT"kB", size / KILOBYTE);
-	}
-	else
-	{
-		snprintf (buf, buf_len, "%.2fMB", (float)size / MEGABYTE);
-	}
+	gchar *formated_str = g_format_size ((guint64)size);
+
+	g_strlcpy (buf, formated_str, buf_len);
+
+	g_free (formated_str);
 }
 
 static void
@@ -396,6 +370,50 @@ dcc_append (struct DCC *dcc, GtkListStore *store, gboolean prepend)
 		dcc_prepare_row_send (dcc, store, &iter, FALSE);
 }
 
+/* Returns aborted and completed transfers. */
+static GSList *
+dcc_get_completed (void)
+{
+	struct DCC *dcc;
+	GtkTreeIter iter;
+	GtkTreeModel *model;	
+	GSList *completed = NULL;
+
+	model = GTK_TREE_MODEL (dccfwin.store);
+	if (gtk_tree_model_get_iter_first (model, &iter))
+	{
+		do
+		{
+			gtk_tree_model_get (model, &iter, COL_DCC, &dcc, -1);
+			if (is_dcc_completed (dcc))
+				completed = g_slist_prepend (completed, dcc);
+				
+		} while (gtk_tree_model_iter_next (model, &iter));
+	}
+
+	return completed;
+}
+
+static gboolean
+dcc_completed_transfer_exists (void)
+{
+	gboolean exist;
+	GSList *comp_list;
+	
+	comp_list = dcc_get_completed (); 
+	exist = comp_list != NULL;
+	
+	g_slist_free (comp_list);	
+	return exist;
+}
+
+static void
+update_clear_button_sensitivity (void)
+{
+	gboolean sensitive = dcc_completed_transfer_exists ();
+	gtk_widget_set_sensitive (dccfwin.clear_button, sensitive);
+}
+
 static void
 dcc_fill_window (int flags)
 {
@@ -442,6 +460,8 @@ dcc_fill_window (int flags)
 		gtk_tree_model_get_iter_first (GTK_TREE_MODEL (dccfwin.store), &iter);
 		gtk_tree_selection_select_iter (dccfwin.sel, &iter);
 	}
+	
+	update_clear_button_sensitivity ();
 }
 
 /* return list of selected DCCs */
@@ -527,6 +547,9 @@ abort_clicked (GtkWidget * wid, gpointer none)
 		dcc_abort (dcc->serv->front_session, dcc);
 	}
 	g_slist_free (start);
+	
+	/* Enable the clear button if it wasn't already enabled */
+	update_clear_button_sensitivity ();
 }
 
 static void
@@ -543,6 +566,27 @@ accept_clicked (GtkWidget * wid, gpointer none)
 			dcc_get (dcc);
 	}
 	g_slist_free (start);
+}
+
+static void
+clear_completed (GtkWidget * wid, gpointer none)
+{
+	struct DCC *dcc;
+	GSList *completed;
+
+	/* Make a new list of only the completed items and abort each item.
+	 * A new list is made because calling dcc_abort removes items from the original list,
+	 * making it impossible to iterate over that list directly.
+	*/
+	for (completed = dcc_get_completed (); completed; completed = completed->next)
+	{
+		dcc = completed->data;
+		dcc_abort (dcc->serv->front_session, dcc);
+	}
+
+	/* The data was freed by dcc_close */
+	g_slist_free (completed);
+	update_clear_button_sensitivity ();
 }
 
 static void
@@ -701,20 +745,20 @@ dcc_detail_label (char *text, GtkWidget *box, int num)
 static void
 dcc_exp_cb (GtkWidget *exp, GtkWidget *box)
 {
-#if GTK_CHECK_VERSION(2,20,0)
 	if (gtk_widget_get_visible (box))
-#else
-	if (GTK_WIDGET_VISIBLE (box))
-#endif
+	{
 		gtk_widget_hide (box);
+	}
 	else
+	{
 		gtk_widget_show (box);
+	}
 }
 
 static void
 dcc_toggle (GtkWidget *item, gpointer data)
 {
-	if (GTK_TOGGLE_BUTTON (item)->active)
+	if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (item)))
 	{
 		view_mode = GPOINTER_TO_INT (data);
 		dcc_fill_window (GPOINTER_TO_INT (data));
@@ -828,6 +872,7 @@ fe_dcc_open_recv_win (int passive)
 	dccfwin.abort_button = gtkutil_button (bbox, GTK_STOCK_CANCEL, 0, abort_clicked, 0, _("Abort"));
 	dccfwin.accept_button = gtkutil_button (bbox, GTK_STOCK_APPLY, 0, accept_clicked, 0, _("Accept"));
 	dccfwin.resume_button = gtkutil_button (bbox, GTK_STOCK_REFRESH, 0, resume_clicked, 0, _("Resume"));
+	dccfwin.clear_button = gtkutil_button (bbox, GTK_STOCK_CLEAR, 0, clear_completed, 0, _("Clear"));
 	dccfwin.open_button = gtkutil_button (bbox, 0, 0, browse_dcc_folder, 0, _("Open Folder..."));
 	gtk_widget_set_sensitive (dccfwin.accept_button, FALSE);
 	gtk_widget_set_sensitive (dccfwin.resume_button, FALSE);
@@ -1071,6 +1116,9 @@ fe_dcc_update (struct DCC *dcc)
 	default:
 		dcc_update_chat (dcc);
 	}
+
+	if (dccfwin.window)
+		update_clear_button_sensitivity();
 }
 
 void

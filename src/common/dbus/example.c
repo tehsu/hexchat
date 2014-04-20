@@ -22,7 +22,7 @@
 #include <config.h>
 #include <dbus/dbus-glib.h>
 #include <stdlib.h>
-#include "marshallers.h"
+#include "../marshal.c"
 
 #define DBUS_SERVICE "org.hexchat.service"
 #define DBUS_REMOTE "/org/hexchat/Remote"
@@ -102,7 +102,9 @@ main (int argc, char **argv)
 	gchar *path;
 	GError *error = NULL;
 
+#if ! GLIB_CHECK_VERSION (2, 36, 0)
 	g_type_init ();
+#endif
 
 	connection = dbus_g_bus_get (DBUS_BUS_SESSION, &error);
 	if (connection == NULL) {
@@ -157,7 +159,7 @@ main (int argc, char **argv)
 	g_print ("Server hook id=%d\n", server_id);
 
 	dbus_g_object_register_marshaller (
-		g_cclosure_user_marshal_VOID__POINTER_POINTER_UINT_UINT,
+		_hexchat_marshal_VOID__POINTER_POINTER_UINT_UINT,
 		G_TYPE_NONE,
 		G_TYPE_STRV, G_TYPE_STRV, G_TYPE_UINT, G_TYPE_UINT,
 		G_TYPE_INVALID);

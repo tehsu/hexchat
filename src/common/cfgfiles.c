@@ -41,6 +41,15 @@
 #define DEF_FONT "Monospace 9"
 #define DEF_FONT_ALTER "Arial Unicode MS,Lucida Sans Unicode,MS Gothic,Unifont"
 
+const char * const languages[LANGUAGES_LENGTH] = {
+	"af", "sq", "am", "ast", "az", "eu", "be", "bg", "ca", "zh_CN",      /*  0 ..  9 */
+	"zh_TW", "cs", "da", "nl", "en_GB", "en", "et", "fi", "fr", "gl",    /* 10 .. 19 */
+	"de", "el", "gu", "hi", "hu", "id", "it", "ja_JP", "kn", "rw",       /* 20 .. 29 */
+	"ko", "lv", "lt", "mk", "ml", "ms", "nb", "no", "pl", "pt",          /* 30 .. 39 */
+	"pt_BR", "pa", "ru", "sr", "sk", "sl", "es", "sv", "th", "tr",       /* 40 .. 49 */
+	"uk", "vi", "wa"                                                     /* 50 .. */
+};
+
 void
 list_addentry (GSList ** list, char *cmd, char *name)
 {
@@ -112,7 +121,7 @@ list_loadconf (char *file, GSList ** list, char *defaultconf)
 	int fd;
 	struct stat st;
 
-	filebuf = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "%s", get_xdir (), file);
+	filebuf = g_build_filename (get_xdir (), file, NULL);
 	fd = g_open (filebuf, O_RDONLY | OFLAGS, 0);
 	g_free (filebuf);
 
@@ -323,35 +332,36 @@ get_xdir (void)
 
 		if (portable_mode () || !get_reg_str ("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "AppData", out, sizeof (out)))
 		{
-			xdir = g_strdup (".\\config");
+			char *path;
+			char file[MAX_PATH];
+			HMODULE hModule;
+			
+			hModule = GetModuleHandle (NULL);
+			if (GetModuleFileName (hModule, file, sizeof(file)))
+			{
+				path = g_path_get_dirname (file);
+				xdir = g_build_filename (path, "config", NULL);
+				g_free (path);
+			}
+			else
+				xdir = g_strdup (".\\config");
 		}
 		else
 		{
-			xdir = g_strdup_printf ("%s\\" "HexChat", out);
+			xdir = g_build_filename (out, "HexChat", NULL);
 		}
 #else
-		xdir = g_strdup_printf ("%s/" HEXCHAT_DIR, g_get_user_config_dir ());
+		xdir = g_build_filename (g_get_user_config_dir (), HEXCHAT_DIR, NULL);
 #endif
 	}
 
 	return xdir;
 }
 
-static void
-check_prefs_dir (void)
+int
+check_config_dir (void)
 {
-	char *dir = get_xdir ();
-	char *msg;
-
-	if (g_access (dir, F_OK) != 0)
-	{
-		if (g_mkdir (dir, 0700) != 0)
-		{
-			msg = g_strdup_printf ("Cannot create %s", get_xdir ());
-			fe_message (msg, FE_MSG_ERROR);
-			g_free (msg);
-		}
-	}
+	return g_access (get_xdir (), F_OK);
 }
 
 static char *
@@ -361,7 +371,7 @@ default_file (void)
 
 	if (!dfile)
 	{
-		dfile = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "hexchat.conf", get_xdir ());
+		dfile = g_build_filename (get_xdir (), "hexchat.conf", NULL);
 	}
 	return dfile;
 }
@@ -373,7 +383,6 @@ const struct prefs vars[] =
 	{"away_auto_unmark", P_OFFINT (hex_away_auto_unmark), TYPE_BOOL},
 	{"away_omit_alerts", P_OFFINT (hex_away_omit_alerts), TYPE_BOOL},
 	{"away_reason", P_OFFSET (hex_away_reason), TYPE_STR},
-	{"away_show_message", P_OFFINT (hex_away_show_message), TYPE_BOOL},
 	{"away_show_once", P_OFFINT (hex_away_show_once), TYPE_BOOL},
 	{"away_size_max", P_OFFINT (hex_away_size_max), TYPE_INT},
 	{"away_timeout", P_OFFINT (hex_away_timeout), TYPE_INT},
@@ -408,8 +417,6 @@ const struct prefs vars[] =
 	{"dcc_stall_timeout", P_OFFINT (hex_dcc_stall_timeout), TYPE_INT},
 	{"dcc_timeout", P_OFFINT (hex_dcc_timeout), TYPE_INT},
 
-	{"dnsprogram", P_OFFSET (hex_dnsprogram), TYPE_STR},
-
 	{"flood_ctcp_num", P_OFFINT (hex_flood_ctcp_num), TYPE_INT},
 	{"flood_ctcp_time", P_OFFINT (hex_flood_ctcp_time), TYPE_INT},
 	{"flood_msg_num", P_OFFINT (hex_flood_msg_num), TYPE_INT},
@@ -426,7 +433,9 @@ const struct prefs vars[] =
 	{"gui_dialog_left", P_OFFINT (hex_gui_dialog_left), TYPE_INT},
 	{"gui_dialog_top", P_OFFINT (hex_gui_dialog_top), TYPE_INT},
 	{"gui_dialog_width", P_OFFINT (hex_gui_dialog_width), TYPE_INT},
+	{"gui_focus_omitalerts", P_OFFINT (hex_gui_focus_omitalerts), TYPE_BOOL},
 	{"gui_hide_menu", P_OFFINT (hex_gui_hide_menu), TYPE_BOOL},
+	{"gui_input_attr", P_OFFINT (hex_gui_input_attr), TYPE_BOOL},
 	{"gui_input_icon", P_OFFINT (hex_gui_input_icon), TYPE_BOOL},
 	{"gui_input_nick", P_OFFINT (hex_gui_input_nick), TYPE_BOOL},
 	{"gui_input_spell", P_OFFINT (hex_gui_input_spell), TYPE_BOOL},
@@ -440,6 +449,7 @@ const struct prefs vars[] =
 	{"gui_pane_right_size", P_OFFINT (hex_gui_pane_right_size), TYPE_INT},
 	{"gui_pane_right_size_min", P_OFFINT (hex_gui_pane_right_size_min), TYPE_INT},
 	{"gui_quit_dialog", P_OFFINT (hex_gui_quit_dialog), TYPE_BOOL},
+	{"gui_search_pos", P_OFFINT (hex_gui_search_pos), TYPE_INT},
 	/* {"gui_single", P_OFFINT (hex_gui_single), TYPE_BOOL}, */
 	{"gui_slist_fav", P_OFFINT (hex_gui_slist_fav), TYPE_BOOL},
 	{"gui_slist_select", P_OFFINT (hex_gui_slist_select), TYPE_INT},
@@ -451,6 +461,7 @@ const struct prefs vars[] =
 	{"gui_tab_layout", P_OFFINT (hex_gui_tab_layout), TYPE_INT},
 	{"gui_tab_newtofront", P_OFFINT (hex_gui_tab_newtofront), TYPE_INT},
 	{"gui_tab_pos", P_OFFINT (hex_gui_tab_pos), TYPE_INT},
+	{"gui_tab_scrollchans", P_OFFINT (hex_gui_tab_scrollchans), TYPE_BOOL},
 	{"gui_tab_server", P_OFFINT (hex_gui_tab_server), TYPE_BOOL},
 	{"gui_tab_small", P_OFFINT (hex_gui_tab_small), TYPE_INT},
 	{"gui_tab_sort", P_OFFINT (hex_gui_tab_sort), TYPE_BOOL},
@@ -458,6 +469,7 @@ const struct prefs vars[] =
 	{"gui_tab_utils", P_OFFINT (hex_gui_tab_utils), TYPE_BOOL},
 	{"gui_throttlemeter", P_OFFINT (hex_gui_throttlemeter), TYPE_INT},
 	{"gui_topicbar", P_OFFINT (hex_gui_topicbar), TYPE_BOOL},
+	{"gui_transparency", P_OFFINT (hex_gui_transparency), TYPE_INT},
 	{"gui_tray", P_OFFINT (hex_gui_tray), TYPE_BOOL},
 	{"gui_tray_away", P_OFFINT (hex_gui_tray_away), TYPE_BOOL},
 	{"gui_tray_blink", P_OFFINT (hex_gui_tray_blink), TYPE_BOOL},
@@ -478,6 +490,7 @@ const struct prefs vars[] =
 	{"gui_url_mod", P_OFFINT (hex_gui_url_mod), TYPE_INT},
 	{"gui_usermenu", P_OFFINT (hex_gui_usermenu), TYPE_BOOL},
 	{"gui_win_height", P_OFFINT (hex_gui_win_height), TYPE_INT},
+	{"gui_win_fullscreen", P_OFFINT (hex_gui_win_fullscreen), TYPE_INT},
 	{"gui_win_left", P_OFFINT (hex_gui_win_left), TYPE_INT},
 	{"gui_win_modes", P_OFFINT (hex_gui_win_modes), TYPE_BOOL},
 	{"gui_win_save", P_OFFINT (hex_gui_win_save), TYPE_BOOL},
@@ -509,9 +522,11 @@ const struct prefs vars[] =
 
 	{"irc_auto_rejoin", P_OFFINT (hex_irc_auto_rejoin), TYPE_BOOL},
 	{"irc_ban_type", P_OFFINT (hex_irc_ban_type), TYPE_INT},
+	{"irc_cap_server_time", P_OFFINT (hex_irc_cap_server_time), TYPE_BOOL},
 	{"irc_conf_mode", P_OFFINT (hex_irc_conf_mode), TYPE_BOOL},
 	{"irc_extra_hilight", P_OFFSET (hex_irc_extra_hilight), TYPE_STR},
 	{"irc_hide_version", P_OFFINT (hex_irc_hide_version), TYPE_BOOL},
+	{"irc_hidehost", P_OFFINT (hex_irc_hidehost), TYPE_BOOL},
 	{"irc_id_ntext", P_OFFSET (hex_irc_id_ntext), TYPE_STR},
 	{"irc_id_ytext", P_OFFSET (hex_irc_id_ytext), TYPE_STR},
 	{"irc_invisible", P_OFFINT (hex_irc_invisible), TYPE_BOOL},
@@ -536,7 +551,9 @@ const struct prefs vars[] =
 	{"irc_whois_front", P_OFFINT (hex_irc_whois_front), TYPE_BOOL},
 
 	{"net_auto_reconnect", P_OFFINT (hex_net_auto_reconnect), TYPE_BOOL},
+#ifndef WIN32	/* FIXME fix reconnect crashes and remove this ifdef! */
 	{"net_auto_reconnectonfail", P_OFFINT (hex_net_auto_reconnectonfail), TYPE_BOOL},
+#endif
 	{"net_bind_host", P_OFFSET (hex_net_bind_host), TYPE_STR},
 	{"net_ping_timeout", P_OFFINT (hex_net_ping_timeout), TYPE_INT},
 	{"net_proxy_auth", P_OFFINT (hex_net_proxy_auth), TYPE_BOOL},
@@ -553,9 +570,6 @@ const struct prefs vars[] =
 	{"notify_whois_online", P_OFFINT (hex_notify_whois_online), TYPE_BOOL},
 
 	{"perl_warnings", P_OFFINT (hex_perl_warnings), TYPE_BOOL},
-
-	{"sound_command", P_OFFSET (hex_sound_command), TYPE_STR},
-	{"sound_dir", P_OFFSET (hex_sound_dir), TYPE_STR},
 
 	{"stamp_log", P_OFFINT (hex_stamp_log), TYPE_BOOL},
 	{"stamp_log_format", P_OFFSET (hex_stamp_log_format), TYPE_STR},
@@ -575,7 +589,6 @@ const struct prefs vars[] =
 	{"text_max_lines", P_OFFINT (hex_text_max_lines), TYPE_INT},
 	{"text_replay", P_OFFINT (hex_text_replay), TYPE_BOOL},
 	{"text_search_case_match", P_OFFINT (hex_text_search_case_match), TYPE_BOOL},
-	{"text_search_backward", P_OFFINT (hex_text_search_backward), TYPE_BOOL},
 	{"text_search_highlight_all", P_OFFINT (hex_text_search_highlight_all), TYPE_BOOL},
 	{"text_search_follow", P_OFFINT (hex_text_search_follow), TYPE_BOOL},
 	{"text_search_regexp", P_OFFINT (hex_text_search_regexp), TYPE_BOOL},
@@ -586,9 +599,6 @@ const struct prefs vars[] =
 	{"text_stripcolor_replay", P_OFFINT (hex_text_stripcolor_replay), TYPE_BOOL},
 	{"text_stripcolor_topic", P_OFFINT (hex_text_stripcolor_topic), TYPE_BOOL},
 	{"text_thin_sep", P_OFFINT (hex_text_thin_sep), TYPE_BOOL},
-	{"text_tint_blue", P_OFFINT (hex_text_tint_blue), TYPE_INT},
-	{"text_tint_green", P_OFFINT (hex_text_tint_green), TYPE_INT},
-	{"text_tint_red", P_OFFINT (hex_text_tint_red), TYPE_INT},
 	{"text_transparent", P_OFFINT (hex_text_transparent), TYPE_BOOL},
 	{"text_wordwrap", P_OFFINT (hex_text_wordwrap), TYPE_BOOL},
 
@@ -617,17 +627,116 @@ convert_with_fallback (const char *str, const char *fallback)
 	return utf;
 }
 
-void
-load_config (void)
+static int
+find_language_number (const char * const lang)
 {
-	char *cfg, *sp, *buf;
-	const char *username, *realname;
-	int res, val, i;
+	int i;
+
+	for (i = 0; i < LANGUAGES_LENGTH; i++)
+		if (!strcmp (lang, languages[i]))
+			return i;
+
+	return -1;
+}
+
+/* Return the number of the system language if found, or english otherwise.
+ */
+static int
+get_default_language (void)
+{
+	const char *locale;
+	char *lang;
+	char *p;
+	int lang_no;
+
+	/* LC_ALL overrides LANG, so we must check it first */
+	locale = g_getenv ("LC_ALL");
+
+	if (!locale)
+		locale = g_getenv ("LANG") ? g_getenv ("LANG") : "en";
+
+	/* we might end up with something like "en_US.UTF-8".  We will try to 
+	 * search for "en_US"; if it fails we search for "en".
+	 */
+	lang = g_strdup (locale);
+
+	if ((p = strchr (lang, '.')))
+		*p='\0';
+
+	lang_no = find_language_number (lang);
+
+	if (lang_no >= 0)
+	{
+		free (lang);
+		return lang_no;
+	}
+
+	if ((p = strchr (lang, '_')))
+		*p='\0';
+
+	lang_no = find_language_number (lang);
+
+	free (lang);
+
+	return lang_no >= 0 ? lang_no : find_language_number ("en");
+}
+
+static char *
+get_default_spell_languages (void)
+{
+	const gchar* const *langs = g_get_language_names ();
+	char *last = NULL;
+	char *p;
+	char lang_list[64];
+	char *ret = lang_list;
+	int i;
+
+	if (langs != NULL)
+	{
+		memset (lang_list, 0, sizeof(lang_list));
+
+		for (i = 0; langs[i]; i++)
+		{
+			if (g_ascii_strncasecmp (langs[i], "C", 1) != 0 && strlen (langs[i]) >= 2)
+			{
+				/* Avoid duplicates */
+				if (!last || !g_str_has_prefix (langs[i], last))
+				{
+					if (last != NULL)
+					{
+						g_free(last);
+						g_strlcat (lang_list, ",", sizeof(lang_list));
+					}
+
+					/* ignore .utf8 */
+					if ((p = strchr (langs[i], '.')))
+						*p='\0';
+
+					last = g_strndup (langs[i], 2);
+
+					g_strlcat (lang_list, langs[i], sizeof(lang_list));
+				}
+			}
+		}
+		if (last != NULL)
+			g_free(last);
+
+		if (lang_list[0])
+			return g_strdup (ret);
+	}
+
+	return g_strdup ("en");
+}
+
+void
+load_default_config(void)
+{
+	const char *username, *realname, *font, *langs;
+	char *sp;
 #ifdef WIN32
 	char out[256];
 #endif
 
-	check_prefs_dir ();
 	username = g_get_user_name ();
 	if (!username)
 		username = "root";
@@ -656,6 +765,10 @@ load_config (void)
 	prefs.hex_gui_autoopen_dialog = 1;
 	prefs.hex_gui_autoopen_recv = 1;
 	prefs.hex_gui_autoopen_send = 1;
+#ifdef HAVE_GTK_MAC
+	prefs.hex_gui_hide_menu = 1;
+#endif
+	prefs.hex_gui_input_attr = 1;
 	prefs.hex_gui_input_icon = 1;
 	prefs.hex_gui_input_nick = 1;
 	prefs.hex_gui_input_spell = 1;
@@ -670,6 +783,7 @@ load_config (void)
 	prefs.hex_gui_tab_server = 1;
 	prefs.hex_gui_tab_sort = 1;
 	prefs.hex_gui_topicbar = 1;
+	prefs.hex_gui_transparency = 255;
 	prefs.hex_gui_tray = 1;
 	prefs.hex_gui_tray_blink = 1;
 	prefs.hex_gui_ulist_count = 1;
@@ -682,7 +796,7 @@ load_config (void)
 	prefs.hex_input_flash_priv = 1;
 	prefs.hex_input_tray_hilight = 1;
 	prefs.hex_input_tray_priv = 1;
-	/* prefs.hex_irc_who_join = 1; prevent kicks and bans caused by overwhelming who'ing after reconnects */
+	prefs.hex_irc_who_join = 1; /* Can kick with inordinate amount of channels, required for some of our features though, TODO: add cap like away check? */
 	prefs.hex_irc_whois_front = 1;
 	prefs.hex_net_auto_reconnect = 1;
 	prefs.hex_net_throttle = 1;
@@ -699,6 +813,7 @@ load_config (void)
 	prefs.hex_text_thin_sep = 1;
 	prefs.hex_text_wordwrap = 1;
 	prefs.hex_url_grabber = 1;
+	prefs.hex_irc_cap_server_time = 0;
 
 	/* NUMBERS */
 	prefs.hex_away_size_max = 300;
@@ -718,7 +833,7 @@ load_config (void)
 	prefs.hex_gui_dialog_height = 256;
 	prefs.hex_gui_dialog_width = 500;
 	prefs.hex_gui_lagometer = 1;
-	prefs.hex_gui_lang = 15;
+	prefs.hex_gui_lang = get_default_language();
 	prefs.hex_gui_pane_left_size = 128;		/* with treeview icons we need a bit bigger space */
 	prefs.hex_gui_pane_right_size = 100;
 	prefs.hex_gui_pane_right_size_min = 80;
@@ -731,15 +846,12 @@ load_config (void)
 	prefs.hex_gui_win_height = 400;
 	prefs.hex_gui_win_width = 640;
 	prefs.hex_input_balloon_time = 20;
-	prefs.hex_irc_ban_type = 2;
-	prefs.hex_irc_join_delay = 3;
+	prefs.hex_irc_ban_type = 1;
+	prefs.hex_irc_join_delay = 5;
 	prefs.hex_net_reconnect_delay = 10;
 	prefs.hex_notify_timeout = 15;
 	prefs.hex_text_max_indent = 256;
 	prefs.hex_text_max_lines = 500;
-	prefs.hex_text_tint_blue = 195;
-	prefs.hex_text_tint_green = 195;
-	prefs.hex_text_tint_red = 195;
 	prefs.hex_url_grabber_limit = 100; 		/* 0 means unlimited */
 
 	/* STRINGS */
@@ -755,15 +867,18 @@ load_config (void)
 		snprintf (prefs.hex_dcc_dir, sizeof (prefs.hex_dcc_dir), "%s\\Downloads", out);
 	}
 #else
-	if (g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD))
-		strcpy (prefs.hex_dcc_dir, g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD));
+	if (g_get_user_special_dir (G_USER_DIRECTORY_DOWNLOAD))
+	{
+		strcpy (prefs.hex_dcc_dir, g_get_user_special_dir (G_USER_DIRECTORY_DOWNLOAD));
+	}
 	else
+	{
 		strcpy (prefs.hex_dcc_dir, g_build_filename (g_get_home_dir (), "Downloads", NULL));
+	}
 #endif
-	strcpy (prefs.hex_dnsprogram, "host");
 	strcpy (prefs.hex_gui_ulist_doubleclick, "QUERY %s");
 	strcpy (prefs.hex_input_command_char, "/");
-	strcpy (prefs.hex_irc_logmask, "%n-%c.log");
+	strcpy (prefs.hex_irc_logmask, g_build_filename ("%n", "%c.log", NULL));
 	strcpy (prefs.hex_irc_nick1, username);
 	strcpy (prefs.hex_irc_nick2, username);
 	strcat (prefs.hex_irc_nick2, "_");
@@ -774,75 +889,113 @@ load_config (void)
 	strcpy (prefs.hex_irc_quit_reason, prefs.hex_irc_part_reason);
 	strcpy (prefs.hex_irc_real_name, realname);
 	strcpy (prefs.hex_irc_user_name, username);
-	snprintf (prefs.hex_sound_dir, sizeof (prefs.hex_sound_dir), "%s" G_DIR_SEPARATOR_S "sounds", get_xdir ());
 	strcpy (prefs.hex_stamp_log_format, "%b %d %H:%M:%S ");
 	strcpy (prefs.hex_stamp_text_format, "[%H:%M:%S] ");
-#ifdef WIN32
-	if (find_font ("Consolas"))
+
+	font = fe_get_default_font ();
+	if (font)
 	{
-		strcpy (prefs.hex_text_font, "Consolas 10");
-		strcpy (prefs.hex_text_font_main, "Consolas 10");
+		strcpy (prefs.hex_text_font, font);
+		strcpy (prefs.hex_text_font_main, font);
 	}
 	else
 	{
 		strcpy (prefs.hex_text_font, DEF_FONT);
 		strcpy (prefs.hex_text_font_main, DEF_FONT);
 	}
-#else
-	strcpy (prefs.hex_text_font, DEF_FONT);
-	strcpy (prefs.hex_text_font_main, DEF_FONT);
-#endif
+
 	strcpy (prefs.hex_text_font_alternative, DEF_FONT_ALTER);
-	strcpy (prefs.hex_text_spell_langs, g_getenv ("LC_ALL") ? g_getenv ("LC_ALL") : "en_US");
+	langs = get_default_spell_languages ();
+	strcpy (prefs.hex_text_spell_langs, langs);
+
 
 	/* private variables */
 	prefs.local_ip = 0xffffffff;
 
+	sp = strchr (prefs.hex_irc_user_name, ' ');
+	if (sp)
+		sp[0] = 0;	/* spaces in username would break the login */
+
 	g_free ((char *)username);
 	g_free ((char *)realname);
+	g_free ((char *)langs);
+}
 
-	if (g_file_get_contents (default_file (), &cfg, NULL, NULL))
+int
+make_config_dirs (void)
+{
+	char *buf;
+
+	if (g_mkdir_with_parents (get_xdir (), 0700) != 0)
+		return -1;
+	
+	buf = g_build_filename (get_xdir (), "addons", NULL);
+	if (g_mkdir (buf, 0700) != 0)
 	{
-		i = 0;
-		do
-		{
-			switch (vars[i].type)
-			{
-			case TYPE_STR:
-				cfg_get_str (cfg, vars[i].name, (char *) &prefs + vars[i].offset,
-								 vars[i].len);
-				break;
-			case TYPE_BOOL:
-			case TYPE_INT:
-				val = cfg_get_int_with_result (cfg, vars[i].name, &res);
-				if (res)
-					*((int *) &prefs + vars[i].offset) = val;
-				break;
-			}
-			i++;
-		}
-		while (vars[i].name);
-
-		g_free (cfg);
-
-	} else
-	{
-#ifndef WIN32
-#ifndef __EMX__
-		/* OS/2 uses UID 0 all the time */
-		if (getuid () == 0)
-			fe_message (_("* Running IRC as root is stupid! You should\n"
-							"  create a User Account and use that to login.\n"), FE_MSG_WARN|FE_MSG_WAIT);
-#endif
-#endif /* !WIN32 */
-
-		g_mkdir (prefs.hex_dcc_dir, 0700);
-		g_mkdir (prefs.hex_dcc_completed_dir, 0700);
-
-		buf = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "addons", get_xdir ());
-		g_mkdir (buf, 0700);
 		g_free (buf);
+		return -1;
 	}
+	g_free (buf);
+	
+	buf = g_build_filename (get_xdir (), HEXCHAT_SOUND_DIR, NULL);
+	if (g_mkdir (buf, 0700) != 0)
+	{
+		g_free (buf);
+		return -1;
+	}
+	g_free (buf);
+
+	return 0;
+}
+
+int
+make_dcc_dirs (void)
+{
+	if (g_mkdir (prefs.hex_dcc_dir, 0700) != 0)
+		return -1;
+
+	if (g_mkdir (prefs.hex_dcc_completed_dir, 0700) != 0)
+		return -1;
+
+	return 0;
+}
+
+int
+load_config (void)
+{
+	char *cfg, *sp;
+	int res, val, i;
+
+	g_assert(check_config_dir () == 0);
+
+	if (!g_file_get_contents (default_file (), &cfg, NULL, NULL))
+		return -1;
+
+	/* If the config is incomplete we have the default values loaded */
+	load_default_config();
+
+	i = 0;
+	do
+	{
+		switch (vars[i].type)
+		{
+		case TYPE_STR:
+			cfg_get_str (cfg, vars[i].name, (char *) &prefs + vars[i].offset,
+				     vars[i].len);
+			break;
+		case TYPE_BOOL:
+		case TYPE_INT:
+			val = cfg_get_int_with_result (cfg, vars[i].name, &res);
+			if (res)
+				*((int *) &prefs + vars[i].offset) = val;
+			break;
+		}
+		i++;
+	}
+	while (vars[i].name);
+	
+	g_free (cfg);
+
 	if (prefs.hex_gui_win_height < 138)
 		prefs.hex_gui_win_height = 138;
 	if (prefs.hex_gui_win_width < 106)
@@ -851,6 +1004,8 @@ load_config (void)
 	sp = strchr (prefs.hex_irc_user_name, ' ');
 	if (sp)
 		sp[0] = 0;	/* spaces in username would break the login */
+
+	return 0;
 }
 
 int
@@ -859,7 +1014,8 @@ save_config (void)
 	int fh, i;
 	char *config, *new_config;
 
-	check_prefs_dir ();
+	if (check_config_dir () != 0)
+		make_config_dirs ();
 
 	config = default_file ();
 	new_config = g_strconcat (config, ".new", NULL);
@@ -873,6 +1029,7 @@ save_config (void)
 
 	if (!cfg_put_str (fh, "version", PACKAGE_VERSION))
 	{
+		close (fh);
 		g_free (new_config);
 		return 0;
 	}
@@ -885,6 +1042,7 @@ save_config (void)
 		case TYPE_STR:
 			if (!cfg_put_str (fh, vars[i].name, (char *) &prefs + vars[i].offset))
 			{
+				close (fh);
 				g_free (new_config);
 				return 0;
 			}
@@ -893,6 +1051,7 @@ save_config (void)
 		case TYPE_BOOL:
 			if (!cfg_put_int (fh, *((int *) &prefs + vars[i].offset), vars[i].name))
 			{
+				close (fh);
 				g_free (new_config);
 				return 0;
 			}
@@ -929,12 +1088,10 @@ set_showval (session *sess, const struct prefs *var, char *tbuf)
 
 	len = strlen (var->name);
 	memcpy (tbuf, var->name, len);
-	dots = 29 - len;
-
-	if (dots < 0)
-	{
+	if (len > 29)
 		dots = 0;
-	}
+	else
+		dots = 29 - len;
 
 	tbuf[len++] = '\003';
 	tbuf[len++] = '2';
@@ -1179,7 +1336,7 @@ hexchat_open_file (char *file, int flags, int mode, int xof_flags)
 			return g_open (file, flags | OFLAGS, 0);
 	}
 
-	buf = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "%s", get_xdir (), file);
+	buf = g_build_filename (get_xdir (), file, NULL);
 
 	if (xof_flags & XOF_DOMODE)
 	{
@@ -1204,7 +1361,7 @@ hexchat_fopen_file (const char *file, const char *mode, int xof_flags)
 	if (xof_flags & XOF_FULLPATH)
 		return fopen (file, mode);
 
-	buf = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "%s", get_xdir (), file);
+	buf = g_build_filename (get_xdir (), file, NULL);
 	fh = g_fopen (buf, mode);
 	g_free (buf);
 

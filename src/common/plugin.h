@@ -1,3 +1,22 @@
+/* HexChat
+ * Copyright (C) 1998-2010 Peter Zelezny.
+ * Copyright (C) 2009-2013 Berke Viktor.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ */
+
 #ifndef HEXCHAT_COMMONPLUGIN_H
 #define HEXCHAT_COMMONPLUGIN_H
 
@@ -113,10 +132,24 @@ struct _hexchat_plugin
 		const char *var);
 	int (*hexchat_pluginpref_list) (hexchat_plugin *ph,
 		char *dest);
-	void *(*hexchat_dummy4) (hexchat_plugin *ph);
-	void *(*hexchat_dummy3) (hexchat_plugin *ph);
-	void *(*hexchat_dummy2) (hexchat_plugin *ph);
-	void *(*hexchat_dummy1) (hexchat_plugin *ph);
+	hexchat_hook *(*hexchat_hook_server_attrs) (hexchat_plugin *ph,
+		   const char *name,
+		   int pri,
+		   int (*callback) (char *word[], char *word_eol[],
+							hexchat_event_attrs *attrs, void *user_data),
+		   void *userdata);
+	hexchat_hook *(*hexchat_hook_print_attrs) (hexchat_plugin *ph,
+		  const char *name,
+		  int pri,
+		  int (*callback) (char *word[], hexchat_event_attrs *attrs,
+						   void *user_data),
+		  void *userdata);
+	int (*hexchat_emit_print_attrs) (hexchat_plugin *ph, hexchat_event_attrs *attrs,
+									 const char *event_name, ...);
+	hexchat_event_attrs *(*hexchat_event_attrs_create) (hexchat_plugin *ph);
+	void (*hexchat_event_attrs_free) (hexchat_plugin *ph,
+									  hexchat_event_attrs *attrs);
+
 	/* PRIVATE FIELDS! */
 	void *handle;		/* from dlopen */
 	char *filename;	/* loaded from */
@@ -131,13 +164,15 @@ struct _hexchat_plugin
 #endif
 
 char *plugin_load (session *sess, char *filename, char *arg);
+int plugin_reload (session *sess, char *name, int by_filename);
 void plugin_add (session *sess, char *filename, void *handle, void *init_func, void *deinit_func, char *arg, int fake);
 int plugin_kill (char *name, int by_filename);
 void plugin_kill_all (void);
 void plugin_auto_load (session *sess);
 int plugin_emit_command (session *sess, char *name, char *word[], char *word_eol[]);
-int plugin_emit_server (session *sess, char *name, char *word[], char *word_eol[]);
-int plugin_emit_print (session *sess, char *word[]);
+int plugin_emit_server (session *sess, char *name, char *word[], char *word_eol[],
+						time_t server_time);
+int plugin_emit_print (session *sess, char *word[], time_t server_time);
 int plugin_emit_dummy_print (session *sess, char *name);
 int plugin_emit_keypress (session *sess, unsigned int state, unsigned int keyval, int len, char *string);
 GList* plugin_command_list(GList *tmp_list);

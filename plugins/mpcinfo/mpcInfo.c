@@ -131,11 +131,11 @@ int hexchat_plugin_init(hexchat_plugin *plugin_handle, char **plugin_name, char 
 	hexchat_hook_command(ph, "mpc", HEXCHAT_PRI_NORM, mpc_tell,"no help text", 0);
 	hexchat_hook_command(ph, "mpc_themes", HEXCHAT_PRI_NORM, print_themes,"no help text", 0);
 	hexchat_hook_command(ph, "mpc_reloadthemes", HEXCHAT_PRI_NORM, mpc_themeReload,"no help text", 0);
-	hexchat_command (ph, "MENU -ietc\\music.png ADD \"Window/Display Current Song (MPC)\" \"MPC\"");
+	hexchat_command (ph, "MENU -ishare\\music.png ADD \"Window/Display Current Song (MPC)\" \"MPC\"");
 
 	themeInit();
 	loadThemes();
-	hexchat_printf(ph, "%s %s plugin loaded\n",*plugin_name, VERSION);
+	hexchat_printf(ph, "%s plugin loaded\n", *plugin_name);
 
 	return 1;
 }

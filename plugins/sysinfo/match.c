@@ -32,47 +32,59 @@ float percentage(unsigned long long *free, unsigned long long *total)
 
 char *pretty_freespace(const char *desc, unsigned long long *free_k, unsigned long long *total_k)
 {
-        char *result, *bytesize;
+        char *result, **quantity;
 	double free_space, total_space;
 	free_space = *free_k;
 	total_space = *total_k;
         result = malloc(bsize * sizeof(char));
-	const char *quantities = "KB\0MB\0GB\0TB\0PB\0EB\0ZB\0YB\0";
-	int i=0;
+	char *quantities[] = { "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB", 0 };
 	if (total_space == 0)
 	{
 		snprintf(result, bsize, "%s: none", desc);
 		return result;
 	}
-        bytesize = malloc(3 * sizeof(char));
-	while (total_space > 1023 && i <= 14)
+        quantity = quantities;
+	while (total_space > 1023 && *(quantity + 1))
 	{
-		i=i+3;
-		*bytesize=*(quantities+i);
-		*(bytesize+1)=*(quantities+i+1);
-		*(bytesize+2)=*(quantities+i+2);
+		quantity++;
 		free_space = free_space / 1024;
 		total_space = total_space / 1024;
 	}
 	if (sysinfo_get_percent () != 0)
 		snprintf(result, bsize, "%s: %.1f%s, %.1f%% free",
-		desc, total_space, bytesize,
+		desc, total_space, *quantity,
 		percentage(free_k, total_k));
 	else
 		snprintf(result, bsize, "%s: %.1f%s/%.1f%s free",
-		desc, free_space, bytesize, total_space, bytesize);
-	free (bytesize);
+		desc, free_space, *quantity, total_space, *quantity);
         return result;
 }
 
+
 void remove_leading_whitespace(char *buffer)
 {
-	char *pos;
-        while((pos = memchr(buffer, 0x20, 1)))
+	char *buffer2 = NULL;
+	int i = 0, j = 0, ews = 0;
+
+	buffer2 = (char*)malloc(strlen(buffer) * sizeof(char));
+	if (buffer2 == NULL)
+		return;
+
+	memset (buffer2, (char)0, strlen(buffer));
+	while (i < strlen(buffer))
 	{
-		pos += 1;
-		strcpy(buffer, pos);
+		/* count tabs, spaces as whitespace. */
+		if (!(buffer[i] == (char)32 || buffer[i] == (char)9) || ews == 1)
+		{
+			ews = 1;
+			buffer2[j] = buffer[i];
+			j++;
+		}
+		i++;
 	}
+	memset (buffer, (char)0, strlen(buffer));
+	strcpy (buffer, buffer2);
+	free (buffer2);
 }
 
 char *decruft_filename(char *buffer)

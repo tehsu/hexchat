@@ -1,3 +1,22 @@
+/* HexChat
+ * Copyright (C) 1998-2010 Peter Zelezny.
+ * Copyright (C) 2009-2013 Berke Viktor.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ */
+
 /* per-channel/dialog settings :: /CHANOPT */
 
 #include <stdio.h>
@@ -46,6 +65,7 @@ static const channel_options chanopt[] =
 	{"text_hidejoinpart", "CONFMODE", S_F(text_hidejoinpart)},
 	{"text_logging", NULL, S_F(text_logging)},
 	{"text_scrollback", NULL, S_F(text_scrollback)},
+	{"text_strip", NULL, S_F(text_strip)},
 };
 
 #undef S_F
@@ -108,6 +128,7 @@ chanopt_command (session *sess, char *tbuf, char *word[], char *word_eol[])
 			if (newval != -1)	/* set new value */
 			{
 				*(guint8 *)G_STRUCT_MEMBER_P(sess, chanopt[i].offset) = newval;
+				chanopt_changed = TRUE;
 			}
 
 			if (!quiet)	/* print value */
@@ -140,21 +161,10 @@ chanopt_command (session *sess, char *tbuf, char *word[], char *word_eol[])
 gboolean
 chanopt_is_set (unsigned int global, guint8 per_chan_setting)
 {
-	if (per_chan_setting == SET_DEFAULT)
+	if (per_chan_setting == SET_ON || per_chan_setting == SET_OFF)
+		return per_chan_setting;
+	else
 		return global;
-
-	return per_chan_setting;
-}
-
-/* additive version */
-
-gboolean
-chanopt_is_set_a (unsigned int global, guint8 per_chan_setting)
-{
-	if (per_chan_setting == SET_DEFAULT)
-		return global;
-
-	return per_chan_setting || global;
 }
 
 /* === below is LOADING/SAVING stuff only === */
@@ -171,6 +181,7 @@ typedef struct
 	guint8 text_hidejoinpart;
 	guint8 text_logging;
 	guint8 text_scrollback;
+	guint8 text_strip;
 
 	char *network;
 	char *channel;
@@ -426,11 +437,9 @@ cont:
 
 	close (fh);
 
-	/* we're quiting, no need to free */
-
-	/*g_slist_free (chanopt_list);
+	g_slist_free (chanopt_list);
 	chanopt_list = NULL;
 
 	chanopt_open = FALSE;
-	chanopt_changed = FALSE;*/
+	chanopt_changed = FALSE;
 }

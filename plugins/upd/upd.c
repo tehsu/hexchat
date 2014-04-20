@@ -27,74 +27,19 @@
 
 #include "hexchat-plugin.h"
 
-#define DEFAULT_DELAY 10	/* 10 seconds */
+#define DEFAULT_DELAY 30	/* 30 seconds */
 #define DEFAULT_FREQ 360	/* 6 hours */
+#define DOWNLOAD_URL "http://dl.hexchat.net/hexchat"
 
 static hexchat_plugin *ph;   /* plugin handle */
 static char name[] = "Update Checker";
 static char desc[] = "Check for HexChat updates automatically";
 static char version[] = "4.0";
 static const char upd_help[] = "Update Checker Usage:\n  /UPDCHK, check for HexChat updates\n  /UPDCHK SET delay|freq, set startup delay or check frequency\n";
-static int legacy_os = 0;
 
 static char*
 check_version ()
 {
-#if 0
-	HINTERNET hINet, hFile;
-	hINet = InternetOpen ("Update Checker", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
-
-	if (!hINet)
-	{
-		return "Unknown";
-	}
-
-	hFile = InternetOpenUrl (hINet,
-							"https://raw.github.com/hexchat/hexchat/master/win32/version.txt",
-							NULL,
-							0,
-							INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_RELOAD,
-							0);
-	if (hFile)
-	{
-		static char buffer[1024];
-		DWORD dwRead;
-		while (InternetReadFile (hFile, buffer, 1023, &dwRead))
-		{
-			if (dwRead == 0)
-			{
-				break;
-			}
-			buffer[dwRead] = 0;
-		}
-
-		InternetCloseHandle (hFile);
-		InternetCloseHandle (hINet);
-		if (strlen (buffer) == 5)
-			return buffer;
-		else
-			return "Unknown";
-	}
-
-	InternetCloseHandle (hINet);
-	return "Unknown";
-#endif
-
-	/* Google Code's messing up with requests, use HTTP/1.0 as suggested. More info:
-
-	   http://code.google.com/p/support/issues/detail?id=6095
-
-	   Of course it would be still too simple, coz IE will override settings, so
-	   you have to disable HTTP/1.1 manually and globally. More info:
-
-	   http://support.microsoft.com/kb/258425
-
-	   So this code's basically useless since disabling HTTP/1.1 will work with the
-	   above code too.
-
-	   Update: a Connection: close header seems to disable chunked encoding.
-	*/
-
 	HINTERNET hOpen, hConnect, hResource;
 
 	hOpen = InternetOpen (TEXT ("Update Checker"),
@@ -121,30 +66,14 @@ check_version ()
 		return "Unknown";
 	}
 
-	if (legacy_os)
-	{
-		hResource = HttpOpenRequest (hConnect,
-									TEXT ("GET"),
-									TEXT ("/hexchat/hexchat/master/win32/version-xp.txt"),
-									TEXT ("HTTP/1.0"),
-									NULL,
-									NULL,
-									INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_AUTH,
-									0);
-	}
-	else
-	{
-		hResource = HttpOpenRequest (hConnect,
-									TEXT ("GET"),
-									TEXT ("/hexchat/hexchat/master/win32/version.txt"),
-									TEXT ("HTTP/1.0"),
-									NULL,
-									NULL,
-									INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_AUTH,
-									0);	
-	}
-
-
+	hResource = HttpOpenRequest (hConnect,
+								TEXT ("GET"),
+								TEXT ("/hexchat/hexchat/master/win32/version.txt"),
+								TEXT ("HTTP/1.0"),
+								NULL,
+								NULL,
+								INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_AUTH,
+								0);
 	if (!hResource)
 	{
 		InternetCloseHandle (hConnect);
@@ -154,7 +83,11 @@ check_version ()
 	else
 	{
 		static char buffer[1024];
+		char infobuffer[32];
+		int statuscode;
+
 		DWORD dwRead;
+		DWORD infolen = sizeof(infobuffer);
 
 		HttpAddRequestHeaders (hResource, TEXT ("Connection: close\r\n"), -1L, HTTP_ADDREQ_FLAG_ADD);	/* workaround for GC bug */
 		HttpSendRequest (hResource, NULL, 0, NULL, 0);
@@ -168,10 +101,18 @@ check_version ()
 			buffer[dwRead] = 0;
 		}
 
+		HttpQueryInfo(hResource,
+					HTTP_QUERY_STATUS_CODE,
+					&infobuffer,
+					&infolen,
+					NULL);
+
 		InternetCloseHandle (hResource);
 		InternetCloseHandle (hConnect);
 		InternetCloseHandle (hOpen);
-		if (strlen (buffer) == 5)
+
+		statuscode = atoi(infobuffer);
+		if (statuscode == 200)
 			return buffer;
 		else
 			return "Unknown";
@@ -250,9 +191,9 @@ print_version (char *word[], char *word_eol[], void *userdata)
 		else
 		{
 #ifdef _WIN64 /* use this approach, the wProcessorArchitecture method always returns 0 (=x86) for some reason */
-			hexchat_printf (ph, "%s\tA HexChat update is available! You can download it from here:\nhttp://dl.hexchat.org/hexchat/HexChat%%20%s%%20x64.exe\n", name, version);
+			hexchat_printf (ph, "%s:\tA HexChat update is available! You can download it from here:\n%s/HexChat%%20%s%%20x64.exe\n", name, DOWNLOAD_URL, version);
 #else
-			hexchat_printf (ph, "%s\tA HexChat update is available! You can download it from here:\nhttp://dl.hexchat.org/hexchat/HexChat%%20%s%%20x86.exe\n", name, version);
+			hexchat_printf (ph, "%s:\tA HexChat update is available! You can download it from here:\n%s/HexChat%%20%s%%20x86.exe\n", name, DOWNLOAD_URL, version);
 #endif
 		}
 		return HEXCHAT_EAT_HEXCHAT;
@@ -273,9 +214,9 @@ print_version_quiet (void *userdata)
 	if (!(strcmp (version, hexchat_get_info (ph, "version")) == 0) && !(strcmp (version, "Unknown") == 0))
 	{
 #ifdef _WIN64 /* use this approach, the wProcessorArchitecture method always returns 0 (=x86) for plugins for some reason */
-		hexchat_printf (ph, "%s\tA HexChat update is available! You can download it from here:\nhttps://github.com/downloads/hexchat/hexchat/HexChat%%20%s%%20x64.exe\n", name, version);
+		hexchat_printf (ph, "%s\tA HexChat update is available! You can download it from here:\n%s/HexChat%%20%s%%20x64.exe\n", name, DOWNLOAD_URL, version);
 #else
-		hexchat_printf (ph, "%s\tA HexChat update is available! You can download it from here:\nhttps://github.com/downloads/hexchat/hexchat/HexChat%%20%s%%20x86.exe\n", name, version);
+		hexchat_printf (ph, "%s\tA HexChat update is available! You can download it from here:\n%s/HexChat%%20%s%%20x86.exe\n", name, DOWNLOAD_URL, version);
 #endif
 		/* print update url once, then stop the timer */
 		return 0;
@@ -303,20 +244,11 @@ int
 hexchat_plugin_init (hexchat_plugin *plugin_handle, char **plugin_name, char **plugin_desc, char **plugin_version, char *arg)
 {
 	int delay;
-	OSVERSIONINFOEX osvi;
 	ph = plugin_handle;
 
 	*plugin_name = name;
 	*plugin_desc = desc;
 	*plugin_version = version;
-
-	osvi.dwOSVersionInfoSize = sizeof (OSVERSIONINFOEX);
-	GetVersionEx ((OSVERSIONINFO*) &osvi);
-
-	if (osvi.dwMajorVersion == 5)
-	{
-		legacy_os = 1;
-	}
 
 	/* these are required for the very first run */
 	delay = hexchat_pluginpref_get_int (ph, "delay");
@@ -333,7 +265,7 @@ hexchat_plugin_init (hexchat_plugin *plugin_handle, char **plugin_name, char **p
 
 	hexchat_hook_command (ph, "UPDCHK", HEXCHAT_PRI_NORM, print_version, upd_help, NULL);
 	hexchat_hook_timer (ph, delay * 1000, delayed_check, NULL);
-	hexchat_command (ph, "MENU -ietc\\download.png ADD \"Help/Check for Updates\" \"UPDCHK\"");
+	hexchat_command (ph, "MENU -ishare\\download.png ADD \"Help/Check for Updates\" \"UPDCHK\"");
 	hexchat_printf (ph, "%s plugin loaded\n", name);
 
 	return 1;       /* return 1 for success */

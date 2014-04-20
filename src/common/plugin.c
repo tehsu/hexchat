@@ -86,6 +86,8 @@ struct _hexchat_list
 typedef int (hexchat_cmd_cb) (char *word[], char *word_eol[], void *user_data);
 typedef int (hexchat_serv_cb) (char *word[], char *word_eol[], void *user_data);
 typedef int (hexchat_print_cb) (char *word[], void *user_data);
+typedef int (hexchat_serv_attrs_cb) (char *word[], char *word_eol[], hexchat_event_attrs *attrs, void *user_data);
+typedef int (hexchat_print_attrs_cb) (char *word[], hexchat_event_attrs *attrs, void *user_data);
 typedef int (hexchat_fd_cb) (int fd, int flags, void *user_data);
 typedef int (hexchat_timer_cb) (void *user_data);
 typedef int (hexchat_init_func) (hexchat_plugin *, char **, char **, char **, char *);
@@ -100,14 +102,21 @@ enum
 	LIST_USERS
 };
 
+/* We use binary flags here because it makes it possible for plugin_hook_find()
+ * to match several types of hooks.  This is used so that plugin_hook_run()
+ * match both HOOK_SERVER and HOOK_SERVER_ATTRS hooks when plugin_emit_server()
+ * is called.
+ */
 enum
 {
-	HOOK_COMMAND,	/* /command */
-	HOOK_SERVER,	/* PRIVMSG, NOTICE, numerics */
-	HOOK_PRINT,		/* All print events */
-	HOOK_TIMER,		/* timeouts */
-	HOOK_FD,			/* sockets & fds */
-	HOOK_DELETED	/* marked for deletion */
+	HOOK_COMMAND      = 1 << 0, /* /command */
+	HOOK_SERVER       = 1 << 1, /* PRIVMSG, NOTICE, numerics */
+	HOOK_SERVER_ATTRS = 1 << 2, /* same as above, with attributes */
+	HOOK_PRINT        = 1 << 3, /* All print events */
+	HOOK_PRINT_ATTRS  = 1 << 4, /* same as above, with attributes */
+	HOOK_TIMER        = 1 << 5, /* timeouts */
+	HOOK_FD           = 1 << 6, /* sockets & fds */
+	HOOK_DELETED      = 1 << 7  /* marked for deletion */
 };
 
 GSList *plugin_list = NULL;	/* export for plugingui.c */
@@ -289,12 +298,11 @@ plugin_add (session *sess, char *filename, void *handle, void *init_func,
 		pl->hexchat_pluginpref_get_int = hexchat_pluginpref_get_int;
 		pl->hexchat_pluginpref_delete = hexchat_pluginpref_delete;
 		pl->hexchat_pluginpref_list = hexchat_pluginpref_list;
-
-		/* incase new plugins are loaded on older HexChat */
-		pl->hexchat_dummy4 = hexchat_dummy;
-		pl->hexchat_dummy3 = hexchat_dummy;
-		pl->hexchat_dummy2 = hexchat_dummy;
-		pl->hexchat_dummy1 = hexchat_dummy;
+		pl->hexchat_hook_server_attrs = hexchat_hook_server_attrs;
+		pl->hexchat_hook_print_attrs = hexchat_hook_print_attrs;
+		pl->hexchat_emit_print_attrs = hexchat_emit_print_attrs;
+		pl->hexchat_event_attrs_create = hexchat_event_attrs_create;
+		pl->hexchat_event_attrs_free = hexchat_event_attrs_free;
 
 		/* run hexchat_plugin_init, if it returns 0, close the plugin */
 		if (((hexchat_init_func *)init_func) (pl, &pl->name, &pl->desc, &pl->version, arg) == 0)
@@ -367,12 +375,33 @@ char *
 plugin_load (session *sess, char *filename, char *arg)
 {
 	void *handle;
+	char *filepart;
 	hexchat_init_func *init_func;
 	hexchat_deinit_func *deinit_func;
+#ifndef USE_GMODULE
+	char *error;
+#else
+	char *pluginpath;
+#endif
+
+	/* get the filename without path */
+	filepart = file_part (filename);
 
 #ifdef USE_GMODULE
 	/* load the plugin */
-	handle = g_module_open (filename, 0);
+	if (!g_ascii_strcasecmp (filepart, filename))
+	{
+		/* no path specified, it's just the filename, try to load from config dir */
+		pluginpath = g_build_filename (get_xdir (), filename, NULL);
+		handle = g_module_open (pluginpath, 0);
+		g_free (pluginpath);
+	}
+	else
+	{
+		/* try to load with absolute path */
+		handle = g_module_open (filename, 0);
+	}
+
 	if (handle == NULL)
 		return (char *)g_module_error ();
 
@@ -388,8 +417,6 @@ plugin_load (session *sess, char *filename, char *arg)
 		deinit_func = NULL;
 
 #else
-	char *error;
-	char *filepart;
 
 /* OpenBSD lacks this! */
 #ifndef RTLD_GLOBAL
@@ -399,9 +426,6 @@ plugin_load (session *sess, char *filename, char *arg)
 #ifndef RTLD_NOW
 #define RTLD_NOW 0
 #endif
-
-	/* get the filename without path */
-	filepart = file_part (filename);
 
 	/* load the plugin */
 	if (filepart &&
@@ -455,43 +479,93 @@ plugin_auto_load_cb (char *filename)
 	}
 }
 
+static char *
+plugin_get_libdir ()
+{
+	const char *libdir;
+
+	libdir = g_getenv ("HEXCHAT_LIBDIR");
+	if (libdir && *libdir)
+		return (char*)libdir;
+	else
+		return HEXCHATLIBDIR;
+}
+
 void
 plugin_auto_load (session *sess)
 {
+	char *lib_dir; 
 	char *sub_dir;
 	ps = sess;
 
-	sub_dir = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "addons", get_xdir ());
+	lib_dir = plugin_get_libdir ();
+	sub_dir = g_build_filename (get_xdir (), "addons", NULL);
 
 #ifdef WIN32
 	/* a long list of bundled plugins that should be loaded automatically,
 	 * user plugins should go to <config>, leave Program Files alone! */
-	for_files (".\\plugins", "hcchecksum.dll", plugin_auto_load_cb);
-	for_files (".\\plugins", "hcdns.dll", plugin_auto_load_cb);
-	for_files (".\\plugins", "hcdoat.dll", plugin_auto_load_cb);
-	for_files (".\\plugins", "hcexec.dll", plugin_auto_load_cb);
-	for_files (".\\plugins", "hcfishlim.dll", plugin_auto_load_cb);
-	/* for_files (".\\plugins", "hchextray.dll", plugin_auto_load_cb); don't load HexTray until it's fixed */
-	for_files (".\\plugins", "hcmpcinfo.dll", plugin_auto_load_cb);
-	for_files (".\\plugins", "hcperl.dll", plugin_auto_load_cb);
-	for_files (".\\plugins", "hcpython.dll", plugin_auto_load_cb);
-	for_files (".\\plugins", "hcupd.dll", plugin_auto_load_cb);
-	for_files (".\\plugins", "hcwinamp.dll", plugin_auto_load_cb);
-	for_files (".\\plugins", "hcsysinfo.dll", plugin_auto_load_cb);
-	for_files (".\\plugins", "hcwmpa.dll", plugin_auto_load_cb);
+	for_files (lib_dir, "hcchecksum.dll", plugin_auto_load_cb);
+	for_files (lib_dir, "hcdoat.dll", plugin_auto_load_cb);
+	for_files (lib_dir, "hcexec.dll", plugin_auto_load_cb);
+	for_files (lib_dir, "hcfishlim.dll", plugin_auto_load_cb);
+	for_files (lib_dir, "hcmpcinfo.dll", plugin_auto_load_cb);
+	for_files (lib_dir, "hcperl.dll", plugin_auto_load_cb);
+	for_files (lib_dir, "hcpython2.dll", plugin_auto_load_cb);
+	for_files (lib_dir, "hcpython3.dll", plugin_auto_load_cb);
+	for_files (lib_dir, "hcupd.dll", plugin_auto_load_cb);
+	for_files (lib_dir, "hcwinamp.dll", plugin_auto_load_cb);
+	for_files (lib_dir, "hcsysinfo.dll", plugin_auto_load_cb);
 
 	for_files (sub_dir, "*.dll", plugin_auto_load_cb);
 #else
 #if defined(__hpux)
-	for_files (HEXCHATLIBDIR "/plugins", "*.sl", plugin_auto_load_cb);
+	for_files (lib_dir, "*.sl", plugin_auto_load_cb);
 	for_files (sub_dir, "*.sl", plugin_auto_load_cb);
 #else
-	for_files (HEXCHATLIBDIR "/plugins", "*.so", plugin_auto_load_cb);
+	for_files (lib_dir, "*.so", plugin_auto_load_cb);
 	for_files (sub_dir, "*.so", plugin_auto_load_cb);
 #endif
 #endif
 
 	g_free (sub_dir);
+}
+
+int
+plugin_reload (session *sess, char *name, int by_filename)
+{
+	GSList *list;
+	char *filename;
+	char *ret;
+	hexchat_plugin *pl;
+
+	list = plugin_list;
+	while (list)
+	{
+		pl = list->data;
+		/* static-plugins (plugin-timer.c) have a NULL filename */
+		if ((by_filename && pl->filename && g_ascii_strcasecmp (name, pl->filename) == 0) ||
+			 (by_filename && pl->filename && g_ascii_strcasecmp (name, file_part (pl->filename)) == 0) ||
+			(!by_filename && g_ascii_strcasecmp (name, pl->name) == 0))
+		{
+			/* statically linked plugins have a NULL filename */
+			if (pl->filename != NULL && !pl->fake)
+			{
+				filename = g_strdup (pl->filename);
+				plugin_free (pl, TRUE, FALSE);
+				ret = plugin_load (sess, filename, NULL);
+				g_free (filename);
+				if (ret == NULL)
+					return 1;
+				else
+					return 0;
+			}
+			else
+				return 2;
+		}
+		list = list->next;
+	}
+
+	return 0;
 }
 
 #endif
@@ -504,16 +578,14 @@ plugin_hook_find (GSList *list, int type, char *name)
 	while (list)
 	{
 		hook = list->data;
-		if (hook->type == type)
+		if (hook && (hook->type & type))
 		{
 			if (g_ascii_strcasecmp (hook->name, name) == 0)
 				return list;
 
-			if (type == HOOK_SERVER)
-			{
-				if (g_ascii_strcasecmp (hook->name, "RAW LINE") == 0)
+			if ((type & HOOK_SERVER)
+				&& g_ascii_strcasecmp (hook->name, "RAW LINE") == 0)
 					return list;
-			}
 		}
 		list = list->next;
 	}
@@ -524,7 +596,8 @@ plugin_hook_find (GSList *list, int type, char *name)
 /* check for plugin hooks and run them */
 
 static int
-plugin_hook_run (session *sess, char *name, char *word[], char *word_eol[], int type)
+plugin_hook_run (session *sess, char *name, char *word[], char *word_eol[],
+				 hexchat_event_attrs *attrs, int type)
 {
 	GSList *list, *next;
 	hexchat_hook *hook;
@@ -542,13 +615,19 @@ plugin_hook_run (session *sess, char *name, char *word[], char *word_eol[], int 
 		hook->pl->context = sess;
 
 		/* run the plugin's callback function */
-		switch (type)
+		switch (hook->type)
 		{
 		case HOOK_COMMAND:
 			ret = ((hexchat_cmd_cb *)hook->callback) (word, word_eol, hook->userdata);
 			break;
+		case HOOK_PRINT_ATTRS:
+			ret = ((hexchat_print_attrs_cb *)hook->callback) (word, attrs, hook->userdata);
+			break;
 		case HOOK_SERVER:
 			ret = ((hexchat_serv_cb *)hook->callback) (word, word_eol, hook->userdata);
+			break;
+		case HOOK_SERVER_ATTRS:
+			ret = ((hexchat_serv_attrs_cb *)hook->callback) (word, word_eol, attrs, hook->userdata);
 			break;
 		default: /*case HOOK_PRINT:*/
 			ret = ((hexchat_print_cb *)hook->callback) (word, hook->userdata);
@@ -575,7 +654,7 @@ xit:
 	{
 		hook = list->data;
 		next = list->next;
-		if (hook->type == HOOK_DELETED)
+		if (!hook || hook->type == HOOK_DELETED)
 		{
 			hook_list = g_slist_remove (hook_list, hook);
 			free (hook);
@@ -591,23 +670,52 @@ xit:
 int
 plugin_emit_command (session *sess, char *name, char *word[], char *word_eol[])
 {
-	return plugin_hook_run (sess, name, word, word_eol, HOOK_COMMAND);
+	return plugin_hook_run (sess, name, word, word_eol, NULL, HOOK_COMMAND);
+}
+
+hexchat_event_attrs *
+hexchat_event_attrs_create (hexchat_plugin *ph)
+{
+	hexchat_event_attrs *attrs;
+
+	attrs = g_malloc (sizeof (*attrs));
+
+	attrs->server_time_utc = (time_t) 0;
+
+	return attrs;
+}
+
+void
+hexchat_event_attrs_free (hexchat_plugin *ph, hexchat_event_attrs *attrs)
+{
+	g_free (attrs);
 }
 
 /* got a server PRIVMSG, NOTICE, numeric etc... */
 
 int
-plugin_emit_server (session *sess, char *name, char *word[], char *word_eol[])
+plugin_emit_server (session *sess, char *name, char *word[], char *word_eol[],
+					time_t server_time)
 {
-	return plugin_hook_run (sess, name, word, word_eol, HOOK_SERVER);
+	hexchat_event_attrs attrs;
+
+	attrs.server_time_utc = server_time;
+
+	return plugin_hook_run (sess, name, word, word_eol, &attrs, 
+							HOOK_SERVER | HOOK_SERVER_ATTRS);
 }
 
 /* see if any plugins are interested in this print event */
 
 int
-plugin_emit_print (session *sess, char *word[])
+plugin_emit_print (session *sess, char *word[], time_t server_time)
 {
-	return plugin_hook_run (sess, word[0], word, NULL, HOOK_PRINT);
+	hexchat_event_attrs attrs;
+
+	attrs.server_time_utc = server_time;
+
+	return plugin_hook_run (sess, word[0], word, NULL, &attrs,
+							HOOK_PRINT | HOOK_PRINT_ATTRS);
 }
 
 int
@@ -620,7 +728,7 @@ plugin_emit_dummy_print (session *sess, char *name)
 	for (i = 1; i < 32; i++)
 		word[i] = "\000";
 
-	return plugin_hook_run (sess, name, word, NULL, HOOK_PRINT);
+	return plugin_hook_run (sess, name, word, NULL, NULL, HOOK_PRINT);
 }
 
 int
@@ -648,7 +756,7 @@ plugin_emit_keypress (session *sess, unsigned int state, unsigned int keyval,
 	for (i = 5; i < PDIWORDS; i++)
 		word[i] = "\000";
 
-	return plugin_hook_run (sess, word[0], word, NULL, HOOK_PRINT);
+	return plugin_hook_run (sess, word[0], word, NULL, NULL, HOOK_PRINT);
 }
 
 static int
@@ -682,12 +790,27 @@ plugin_insert_hook (hexchat_hook *new_hook)
 {
 	GSList *list;
 	hexchat_hook *hook;
+	int new_hook_type;
+ 
+	switch (new_hook->type)
+	{
+		case HOOK_PRINT:
+		case HOOK_PRINT_ATTRS:
+			new_hook_type = HOOK_PRINT | HOOK_PRINT_ATTRS;
+			break;
+		case HOOK_SERVER:
+		case HOOK_SERVER_ATTRS:
+			new_hook_type = HOOK_SERVER | HOOK_PRINT_ATTRS;
+			break;
+		default:
+			new_hook_type = new_hook->type;
+	}
 
 	list = hook_list;
 	while (list)
 	{
 		hook = list->data;
-		if (hook->type == new_hook->type && hook->pri <= new_hook->pri)
+		if (hook && (hook->type & new_hook_type) && hook->pri <= new_hook->pri)
 		{
 			hook_list = g_slist_insert_before (hook_list, list, new_hook);
 			return;
@@ -765,7 +888,7 @@ plugin_command_list(GList *tmp_list)
 	while (list)
 	{
 		hook = list->data;
-		if (hook->type == HOOK_COMMAND)
+		if (hook && hook->type == HOOK_COMMAND)
 			tmp_list = g_list_prepend(tmp_list, hook->name);
 		list = list->next;
 	}
@@ -783,7 +906,7 @@ plugin_command_foreach (session *sess, void *userdata,
 	while (list)
 	{
 		hook = list->data;
-		if (hook->type == HOOK_COMMAND && hook->name[0])
+		if (hook && hook->type == HOOK_COMMAND && hook->name[0])
 		{
 			cb (sess, userdata, hook->name, hook->help_text);
 		}
@@ -854,10 +977,26 @@ hexchat_hook_server (hexchat_plugin *ph, const char *name, int pri,
 }
 
 hexchat_hook *
+hexchat_hook_server_attrs (hexchat_plugin *ph, const char *name, int pri,
+						   hexchat_serv_attrs_cb *callb, void *userdata)
+{
+	return plugin_add_hook (ph, HOOK_SERVER_ATTRS, pri, name, 0, callb, 0,
+							userdata);
+}
+
+hexchat_hook *
 hexchat_hook_print (hexchat_plugin *ph, const char *name, int pri,
 						hexchat_print_cb *callb, void *userdata)
 {
 	return plugin_add_hook (ph, HOOK_PRINT, pri, name, 0, callb, 0, userdata);
+}
+
+hexchat_hook *
+hexchat_hook_print_attrs (hexchat_plugin *ph, const char *name, int pri,
+						  hexchat_print_attrs_cb *callb, void *userdata)
+{
+	return plugin_add_hook (ph, HOOK_PRINT_ATTRS, pri, name, 0, callb, 0,
+							userdata);
 }
 
 hexchat_hook *
@@ -1041,7 +1180,7 @@ hexchat_get_info (hexchat_plugin *ph, const char *id)
 	switch (hash)
 	{
 		case 0x325acab5:	/* libdirfs */
-			return HEXCHATLIBDIR;
+			return plugin_get_libdir ();
 
 		case 0x14f51cd8: /* version */
 			return PACKAGE_VERSION;
@@ -1096,9 +1235,10 @@ hexchat_get_info (hexchat_plugin *ph, const char *id)
 	case 0x339763: /* nick */
 		return sess->server->nick;
 
+	case 0x4889ba9b: /* password */
 	case 0x438fdf9: /* nickserv */
 		if (sess->server->network)
-			return ((ircnet *)sess->server->network)->nickserv;
+			return ((ircnet *)sess->server->network)->pass;
 		return NULL;
 
 	case 0xca022f43: /* server */
@@ -1263,7 +1403,7 @@ hexchat_list_fields (hexchat_plugin *ph, const char *name)
 	};
 	static const char * const channels_fields[] =
 	{
-		"schannel",	"schantypes", "pcontext", "iflags", "iid", "ilag", "imaxmodes",
+		"schannel",	"schannelkey", "schantypes", "pcontext", "iflags", "iid", "ilag", "imaxmodes",
 		"snetwork", "snickmodes", "snickprefixes", "iqueue", "sserver", "itype", "iusers",
 		NULL
 	};
@@ -1277,7 +1417,7 @@ hexchat_list_fields (hexchat_plugin *ph, const char *name)
 	};
 	static const char * const users_fields[] =
 	{
-		"iaway", "shost", "tlasttalk", "snick", "sprefix", "srealname", "iselected", NULL
+		"saccount", "iaway", "shost", "tlasttalk", "snick", "sprefix", "srealname", "iselected", NULL
 	};
 	static const char * const list_of_lists[] =
 	{
@@ -1358,6 +1498,8 @@ hexchat_list_str (hexchat_plugin *ph, hexchat_list *xlist, const char *name)
 		{
 		case 0x2c0b7d03: /* channel */
 			return ((session *)data)->channel;
+		case 0x8cea5e7c: /* channelkey */
+			return ((session *)data)->channelkey;
 		case 0x577e0867: /* chantypes */
 			return ((session *)data)->server->chantypes;
 		case 0x38b735af: /* context */
@@ -1406,6 +1548,8 @@ hexchat_list_str (hexchat_plugin *ph, hexchat_list *xlist, const char *name)
 	case LIST_USERS:
 		switch (hash)
 		{
+		case 0xb9d38a2d: /* account */
+			return ((struct User *)data)->account;
 		case 0x339763: /* nick */
 			return ((struct User *)data)->nick;
 		case 0x30f5a8: /* host */
@@ -1426,7 +1570,8 @@ hexchat_list_int (hexchat_plugin *ph, hexchat_list *xlist, const char *name)
 {
 	guint32 hash = str_hash (name);
 	gpointer data = ph->context;
-	int tmp, type = LIST_CHANNELS;
+	int tmp = 0;
+	int type = LIST_CHANNELS;
 
 	/* a NULL xlist is a shortcut to current "channels" context */
 	if (xlist)
@@ -1479,13 +1624,25 @@ hexchat_list_int (hexchat_plugin *ph, hexchat_list *xlist, const char *name)
 		case 0xd1b:	/* id */
 			return ((struct session *)data)->server->id;
 		case 0x5cfee87:	/* flags */
-			tmp = ((struct session *)data)->alert_taskbar;   /* bit 10 */
+			/* used if text_strip is unset */                    /* 16 */
+			tmp <<= 1;
+			tmp = ((struct session *)data)->text_strip;          /* 15 */
+			tmp <<= 1;
+			/* used if text_scrollback is unset */               /* 14 */
+			tmp <<= 1;
+			tmp |= ((struct session *)data)->text_scrollback;    /* 13 */
+			tmp <<= 1;
+			/* used if text_logging is unset */                  /* 12 */
+			tmp <<= 1;
+			tmp |= ((struct session *)data)->text_logging;       /* 11 */
+			tmp <<= 1;
+			tmp |= ((struct session *)data)->alert_taskbar;      /* 10 */
 			tmp <<= 1;
 			tmp |= ((struct session *)data)->alert_tray;         /* 9 */
 			tmp <<= 1;
 			tmp |= ((struct session *)data)->alert_beep;         /* 8 */
 			tmp <<= 1;
-			/*tmp |= ((struct session *)data)->color_paste;*/    /* 7 */
+			/* used if text_hidejoinpart is unset */              /* 7 */
 			tmp <<= 1;
 			tmp |= ((struct session *)data)->text_hidejoinpart;   /* 6 */
 			tmp <<= 1;
@@ -1580,8 +1737,36 @@ hexchat_emit_print (hexchat_plugin *ph, const char *event_name, ...)
 			break;
 	}
 
-	i = text_emit_by_name ((char *)event_name, ph->context, argv[0], argv[1],
-								  argv[2], argv[3]);
+	i = text_emit_by_name ((char *)event_name, ph->context, (time_t) 0,
+						   argv[0], argv[1], argv[2], argv[3]);
+	va_end (args);
+
+	return i;
+}
+
+int
+hexchat_emit_print_attrs (hexchat_plugin *ph, hexchat_event_attrs *attrs,
+						  const char *event_name, ...)
+{
+	va_list args;
+	/* currently only 4 because no events use more than 4.
+		This can be easily expanded without breaking the API. */
+	char *argv[4] = {NULL, NULL, NULL, NULL};
+	int i = 0;
+
+	va_start (args, event_name);
+	while (1)
+	{
+		argv[i] = va_arg (args, char *);
+		if (!argv[i])
+			break;
+		i++;
+		if (i >= 4)
+			break;
+	}
+
+	i = text_emit_by_name ((char *)event_name, ph->context, attrs->server_time_utc,
+						   argv[0], argv[1], argv[2], argv[3]);
 	va_end (args);
 
 	return i;
@@ -1653,9 +1838,9 @@ hexchat_pluginpref_set_str_real (hexchat_plugin *pl, const char *var, const char
 			g_free (buffer);
 			close (fhOut);
 
-			buffer = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "%s", get_xdir (), confname);
+			buffer = g_build_filename (get_xdir (), confname, NULL);
 			g_free (confname);
-			buffer_tmp = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "%s", get_xdir (), confname_tmp);
+			buffer_tmp = g_build_filename (get_xdir (), confname_tmp, NULL);
 			g_free (confname_tmp);
 
 #ifdef WIN32
@@ -1727,9 +1912,9 @@ hexchat_pluginpref_set_str_real (hexchat_plugin *pl, const char *var, const char
 
 		close (fhOut);
 
-		buffer = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "%s", get_xdir (), confname);
+		buffer = g_build_filename (get_xdir (), confname, NULL);
 		g_free (confname);
-		buffer_tmp = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "%s", get_xdir (), confname_tmp);
+		buffer_tmp = g_build_filename (get_xdir (), confname_tmp, NULL);
 		g_free (confname_tmp);
 
 #ifdef WIN32
@@ -1814,7 +1999,7 @@ hexchat_pluginpref_set_int (hexchat_plugin *pl, const char *var, int value)
 {
 	char buffer[12];
 
-	sprintf (buffer, "%d", value);
+	snprintf (buffer, sizeof (buffer), "%d", value);
 	return hexchat_pluginpref_set_str_real (pl, var, buffer, 1);
 }
 
@@ -1865,8 +2050,8 @@ hexchat_pluginpref_list (hexchat_plugin *pl, char* dest)
 		while (fscanf (fpIn, " %[^\n]", bufp) != EOF)	/* read whole lines including whitespaces */
 		{
 			token = strtok (buffer, "=");
-			strncat (dest, token, strlen (token) - 1);
-			strcat (dest, ",");
+			g_strlcat (dest, g_strchomp (token), 4096); /* Dest must not be smaller than this */
+			g_strlcat (dest, ",", 4096);
 		}
 
 		fclose (fpIn);

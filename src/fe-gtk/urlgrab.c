@@ -22,16 +22,6 @@
 
 #include "fe-gtk.h"
 
-#include <gtk/gtkhbox.h>
-#include <gtk/gtkstock.h>
-#include <gtk/gtkhbbox.h>
-#include <gtk/gtkscrolledwindow.h>
-
-#include <gtk/gtkliststore.h>
-#include <gtk/gtktreeview.h>
-#include <gtk/gtktreeselection.h>
-#include <gtk/gtkcellrenderertext.h>
-
 #include "../common/hexchat.h"
 #include "../common/hexchatc.h"
 #include "../common/cfgfiles.h"
@@ -59,13 +49,22 @@ url_treeview_url_clicked_cb (GtkWidget *view, GdkEventButton *event,
 {
 	GtkTreeIter iter;
 	gchar *url;
+	GtkTreeSelection *sel;
+	GtkTreePath *path;
+	GtkTreeView *tree = GTK_TREE_VIEW (view);
 
-	if (!event ||
-	    !gtkutil_treeview_get_selected (GTK_TREE_VIEW (view), &iter,
-	                                    URL_COLUMN, &url, -1))
-	{
+	if (!event || !gtk_tree_view_get_path_at_pos (tree, event->x, event->y, &path, 0, 0, 0))
 		return FALSE;
-	}
+
+	/* select what they right-clicked on */
+	sel = gtk_tree_view_get_selection (tree); 
+	gtk_tree_selection_unselect_all (sel);
+	gtk_tree_selection_select_path (sel, path);
+	gtk_tree_path_free (path); 
+
+	if (!gtkutil_treeview_get_selected (GTK_TREE_VIEW (view), &iter,
+	                                    URL_COLUMN, &url, -1))
+		return FALSE;
 	
 	switch (event->button)
 	{
@@ -147,7 +146,7 @@ static void
 url_button_save (void)
 {
 	gtkutil_file_req (_("Select an output filename"),
-							url_save_callback, NULL, get_xdir (), NULL, FRF_WRITE|FRF_FILTERISINITIAL);
+							url_save_callback, NULL, NULL, NULL, FRF_WRITE);
 }
 
 void

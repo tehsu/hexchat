@@ -19,8 +19,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <glib.h>
-#include <glib/gprintf.h>
 
 #include "hexchat.h"
 #include "hexchatc.h"
@@ -34,6 +32,8 @@
 #include <strings.h>
 #endif
 
+#include <glib/gprintf.h>
+
 typedef struct
 {
 	server *serv;
@@ -46,9 +46,12 @@ typedef struct
 static int is_prefix_char (server * serv, char c);
 static void record_chan_mode (session *sess, char sign, char mode, char *arg);
 static char *mode_cat (char *str, char *addition);
-static void handle_single_mode (mode_run *mr, char sign, char mode, char *nick, char *chan, char *arg, int quiet, int is_324);
+static void handle_single_mode (mode_run *mr, char sign, char mode, char *nick,
+										  char *chan, char *arg, int quiet, int is_324,
+										  const message_tags_data *tags_data);
 static int mode_has_arg (server *serv, char sign, char mode);
-static void mode_print_grouped (session *sess, char *nick, mode_run *mr);
+static void mode_print_grouped (session *sess, char *nick, mode_run *mr,
+										  const message_tags_data *tags_data);
 static int mode_chanmode_type (server * serv, char mode);
 
 
@@ -387,11 +390,14 @@ mode_cat (char *str, char *addition)
 
 static void
 handle_single_mode (mode_run *mr, char sign, char mode, char *nick,
-						  char *chan, char *arg, int quiet, int is_324)
+						  char *chan, char *arg, int quiet, int is_324,
+						  const message_tags_data *tags_data)
 {
 	session *sess;
 	server *serv = mr->serv;
 	char outbuf[4];
+	char *cm = serv->chanmodes;
+	gboolean supportsq = FALSE;
 
 	outbuf[0] = sign;
 	outbuf[1] = 0;
@@ -417,6 +423,17 @@ handle_single_mode (mode_run *mr, char sign, char mode, char *nick,
 			record_chan_mode (sess, sign, mode, arg);
 	}
 
+	/* Is q a chanmode on this server? */
+	if (cm)
+		while (*cm)
+		{
+			if (*cm == ',')
+				break;
+			if (*cm == 'q')
+				supportsq = TRUE;
+			cm++;
+		}
+
 	switch (sign)
 	{
 	case '+':
@@ -427,14 +444,16 @@ handle_single_mode (mode_run *mr, char sign, char mode, char *nick,
 			fe_update_channel_key (sess);
 			fe_update_mode_buttons (sess, mode, sign);
 			if (!quiet)
-				EMIT_SIGNAL (XP_TE_CHANSETKEY, sess, nick, arg, NULL, NULL, 0);
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANSETKEY, sess, nick, arg, NULL,
+											  NULL, 0, tags_data->timestamp);
 			return;
 		case 'l':
 			sess->limit = atoi (arg);
 			fe_update_channel_limit (sess);
 			fe_update_mode_buttons (sess, mode, sign);
 			if (!quiet)
-				EMIT_SIGNAL (XP_TE_CHANSETLIMIT, sess, nick, arg, NULL, NULL, 0);
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANSETLIMIT, sess, nick, arg, NULL,
+											  NULL, 0, tags_data->timestamp);
 			return;
 		case 'o':
 			if (!quiet)
@@ -442,7 +461,8 @@ handle_single_mode (mode_run *mr, char sign, char mode, char *nick,
 			return;
 		case 'h':
 			if (!quiet)
-				EMIT_SIGNAL (XP_TE_CHANHOP, sess, nick, arg, NULL, NULL, 0);
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANHOP, sess, nick, arg, NULL, NULL,
+											  0, tags_data->timestamp);
 			return;
 		case 'v':
 			if (!quiet)
@@ -450,15 +470,25 @@ handle_single_mode (mode_run *mr, char sign, char mode, char *nick,
 			return;
 		case 'b':
 			if (!quiet)
-				EMIT_SIGNAL (XP_TE_CHANBAN, sess, nick, arg, NULL, NULL, 0);
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANBAN, sess, nick, arg, NULL, NULL,
+											  0, tags_data->timestamp);
 			return;
 		case 'e':
 			if (!quiet)
-				EMIT_SIGNAL (XP_TE_CHANEXEMPT, sess, nick, arg, NULL, NULL, 0);
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANEXEMPT, sess, nick, arg, NULL,
+											  NULL, 0, tags_data->timestamp);
 			return;
 		case 'I':
 			if (!quiet)
-				EMIT_SIGNAL (XP_TE_CHANINVITE, sess, nick, arg, NULL, NULL, 0);
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANINVITE, sess, nick, arg, NULL, NULL,
+											  0, tags_data->timestamp);
+			return;
+		case 'q':
+			if (!supportsq)
+				break; /* +q is owner on this server */
+			if (!quiet)
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANQUIET, sess, nick, arg, NULL, NULL, 0,
+								 tags_data->timestamp);
 			return;
 		}
 		break;
@@ -470,14 +500,16 @@ handle_single_mode (mode_run *mr, char sign, char mode, char *nick,
 			fe_update_channel_key (sess);
 			fe_update_mode_buttons (sess, mode, sign);
 			if (!quiet)
-				EMIT_SIGNAL (XP_TE_CHANRMKEY, sess, nick, NULL, NULL, NULL, 0);
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANRMKEY, sess, nick, NULL, NULL,
+											  NULL, 0, tags_data->timestamp);
 			return;
 		case 'l':
 			sess->limit = 0;
 			fe_update_channel_limit (sess);
 			fe_update_mode_buttons (sess, mode, sign);
 			if (!quiet)
-				EMIT_SIGNAL (XP_TE_CHANRMLIMIT, sess, nick, NULL, NULL, NULL, 0);
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANRMLIMIT, sess, nick, NULL, NULL,
+											  NULL, 0, tags_data->timestamp);
 			return;
 		case 'o':
 			if (!quiet)
@@ -485,7 +517,8 @@ handle_single_mode (mode_run *mr, char sign, char mode, char *nick,
 			return;
 		case 'h':
 			if (!quiet)
-				EMIT_SIGNAL (XP_TE_CHANDEHOP, sess, nick, arg, NULL, NULL, 0);
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANDEHOP, sess, nick, arg, NULL,
+											  NULL, 0, tags_data->timestamp);
 			return;
 		case 'v':
 			if (!quiet)
@@ -493,15 +526,25 @@ handle_single_mode (mode_run *mr, char sign, char mode, char *nick,
 			return;
 		case 'b':
 			if (!quiet)
-				EMIT_SIGNAL (XP_TE_CHANUNBAN, sess, nick, arg, NULL, NULL, 0);
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANUNBAN, sess, nick, arg, NULL, NULL,
+											  0, tags_data->timestamp);
 			return;
 		case 'e':
 			if (!quiet)
-				EMIT_SIGNAL (XP_TE_CHANRMEXEMPT, sess, nick, arg, NULL, NULL, 0);
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANRMEXEMPT, sess, nick, arg, NULL,
+											  NULL, 0, tags_data->timestamp);
 			return;
 		case 'I':
 			if (!quiet)
-				EMIT_SIGNAL (XP_TE_CHANRMINVITE, sess, nick, arg, NULL, NULL, 0);
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANRMINVITE, sess, nick, arg, NULL,
+											  NULL, 0, tags_data->timestamp);
+			return;
+		case 'q':
+			if (!supportsq)
+				break; /* -q is owner on this server */
+			if (!quiet)
+				EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANUNQUIET, sess, nick, arg, NULL,
+											  NULL, 0, tags_data->timestamp);
 			return;
 		}
 	}
@@ -519,10 +562,12 @@ handle_single_mode (mode_run *mr, char sign, char mode, char *nick,
 		{
 			char *buf = malloc (strlen (chan) + strlen (arg) + 2);
 			sprintf (buf, "%s %s", chan, arg);
-			EMIT_SIGNAL (XP_TE_CHANMODEGEN, sess, nick, outbuf, outbuf + 2, buf, 0);
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANMODEGEN, sess, nick, outbuf,
+										  outbuf + 2, buf, 0, tags_data->timestamp);
 			free (buf);
 		} else
-			EMIT_SIGNAL (XP_TE_CHANMODEGEN, sess, nick, outbuf, outbuf + 2, chan, 0);
+			EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANMODEGEN, sess, nick, outbuf,
+										  outbuf + 2, chan, 0, tags_data->timestamp);
 	}
 }
 
@@ -582,33 +627,38 @@ mode_chanmode_type (server * serv, char mode)
 }
 
 static void
-mode_print_grouped (session *sess, char *nick, mode_run *mr)
+mode_print_grouped (session *sess, char *nick, mode_run *mr,
+						  const message_tags_data *tags_data)
 {
 	/* print all the grouped Op/Deops */
 	if (mr->op)
 	{
-		EMIT_SIGNAL (XP_TE_CHANOP, sess, nick, mr->op, NULL, NULL, 0);
+		EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANOP, sess, nick, mr->op, NULL, NULL, 0,
+									  tags_data->timestamp);
 		free (mr->op);
 		mr->op = NULL;
 	}
 
 	if (mr->deop)
 	{
-		EMIT_SIGNAL (XP_TE_CHANDEOP, sess, nick, mr->deop, NULL, NULL, 0);
+		EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANDEOP, sess, nick, mr->deop, NULL, NULL,
+									  0, tags_data->timestamp);
 		free (mr->deop);
 		mr->deop = NULL;
 	}
 
 	if (mr->voice)
 	{
-		EMIT_SIGNAL (XP_TE_CHANVOICE, sess, nick, mr->voice, NULL, NULL, 0);
+		EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANVOICE, sess, nick, mr->voice, NULL, NULL,
+									  0, tags_data->timestamp);
 		free (mr->voice);
 		mr->voice = NULL;
 	}
 
 	if (mr->devoice)
 	{
-		EMIT_SIGNAL (XP_TE_CHANDEVOICE, sess, nick, mr->devoice, NULL, NULL, 0);
+		EMIT_SIGNAL_TIMESTAMP (XP_TE_CHANDEVOICE, sess, nick, mr->devoice, NULL,
+									  NULL, 0, tags_data->timestamp);
 		free (mr->devoice);
 		mr->devoice = NULL;
 	}
@@ -619,7 +669,7 @@ mode_print_grouped (session *sess, char *nick, mode_run *mr)
 
 void
 handle_mode (server * serv, char *word[], char *word_eol[],
-				 char *nick, int numeric_324)
+				 char *nick, int numeric_324, const message_tags_data *tags_data)
 {
 	session *sess;
 	char *chan;
@@ -662,7 +712,8 @@ handle_mode (server * serv, char *word[], char *word_eol[],
 		word_eol[offset][len] = 0;
 
 	if (prefs.hex_irc_raw_modes && !numeric_324)
-		EMIT_SIGNAL (XP_TE_RAWMODES, sess, nick, word_eol[offset], 0, 0, 0);
+		EMIT_SIGNAL_TIMESTAMP (XP_TE_RAWMODES, sess, nick, word_eol[offset], 0, 0, 0,
+									  tags_data->timestamp);
 
 	if (numeric_324 && !using_front_tab)
 	{
@@ -706,7 +757,7 @@ handle_mode (server * serv, char *word[], char *word_eol[],
 		case '-':
 		case '+':
 			/* print all the grouped Op/Deops */
-			mode_print_grouped (sess, nick, &mr);
+			mode_print_grouped (sess, nick, &mr, tags_data);
 			sign = *modes;
 			break;
 		default:
@@ -718,7 +769,7 @@ handle_mode (server * serv, char *word[], char *word_eol[],
 			}
 			handle_single_mode (&mr, sign, *modes, nick, chan,
 									  argstr, numeric_324 || prefs.hex_irc_raw_modes,
-									  numeric_324);
+									  numeric_324, tags_data);
 		}
 
 		modes++;
@@ -729,13 +780,13 @@ handle_mode (server * serv, char *word[], char *word_eol[],
 		fe_set_title (sess);
 
 	/* print all the grouped Op/Deops */
-	mode_print_grouped (sess, nick, &mr);
+	mode_print_grouped (sess, nick, &mr, tags_data);
 }
 
 /* handle the 005 numeric */
 
 void
-inbound_005 (server * serv, char *word[])
+inbound_005 (server * serv, char *word[], const message_tags_data *tags_data)
 {
 	int w;
 	char *pre;
@@ -776,6 +827,9 @@ inbound_005 (server * serv, char *word[])
 		} else if (strncmp (word[w], "WATCH=", 6) == 0)
 		{
 			serv->supports_watch = TRUE;
+		} else if (strncmp (word[w], "MONITOR=", 8) == 0)
+		{
+			serv->supports_monitor = TRUE;
 		} else if (strncmp (word[w], "NETWORK=", 8) == 0)
 		{
 /*			if (serv->networkname)
@@ -788,21 +842,13 @@ inbound_005 (server * serv, char *word[])
 				fe_set_channel (serv->server_session);
 			}
 
-			/* use /NICKSERV */
-			if (g_ascii_strcasecmp (word[w] + 8, "RusNet") == 0)
-				serv->nickservtype = 1;
-			else if (g_ascii_strcasecmp (word[w] + 8, "UniBG") == 0)
-				serv->nickservtype = 3;
-			else if (g_ascii_strcasecmp (word[w] + 8, "QuakeNet") == 0)
-				serv->nickservtype = 4;
-
 		} else if (strncmp (word[w], "CASEMAPPING=", 12) == 0)
 		{
 			if (strcmp (word[w] + 12, "ascii") == 0)	/* bahamut */
 				serv->p_cmp = (void *)g_ascii_strcasecmp;
 		} else if (strncmp (word[w], "CHARSET=", 8) == 0)
 		{
-			if (g_ascii_strcasecmp (word[w] + 8, "UTF-8") == 0)
+			if (g_ascii_strncasecmp (word[w] + 8, "UTF-8", 5) == 0)
 			{
 				server_set_encoding (serv, "UTF-8");
 			}

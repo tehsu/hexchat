@@ -1,3 +1,22 @@
+/* HexChat
+ * Copyright (C) 1998-2010 Peter Zelezny.
+ * Copyright (C) 2009-2013 Berke Viktor.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ */
+
 #include "userlist.h"
 #include "dcc.h"
 
@@ -67,7 +86,8 @@ void fe_text_clear (struct session *sess, int lines);
 void fe_close_window (struct session *sess);
 void fe_progressbar_start (struct session *sess);
 void fe_progressbar_end (struct server *serv);
-void fe_print_text (struct session *sess, char *text, time_t stamp);
+void fe_print_text (struct session *sess, char *text, time_t stamp,
+					gboolean no_activity);
 void fe_userlist_insert (struct session *sess, struct User *newuser, int row, int sel);
 int fe_userlist_remove (struct session *sess, struct User *user);
 void fe_userlist_rehash (struct session *sess, struct User *user);
@@ -98,19 +118,21 @@ void fe_set_nick (struct server *serv, char *newnick);
 void fe_ignore_update (int level);
 void fe_beep (session *sess);
 void fe_lastlog (session *sess, session *lastlog_sess, char *sstr, gtk_xtext_search_flags flags);
-void fe_set_lag (server *serv, int lag);
+void fe_set_lag (server *serv, long lag);
 void fe_set_throttle (server *serv);
 void fe_set_away (server *serv);
 void fe_serverlist_open (session *sess);
+void fe_get_bool (char *title, char *prompt, void *callback, void *userdata);
 void fe_get_str (char *prompt, char *def, void *callback, void *ud);
 void fe_get_int (char *prompt, int def, void *callback, void *ud);
 #define FRF_WRITE 1				/* save file */
 #define FRF_MULTIPLE 2			/* multi-select */
-#define FRF_ADDFOLDER 4			/* add ~/.config/hexchat to favourites */
+#define FRF_RECENTLYUSED 4		/* let gtk decide start dir instead of our config */
 #define FRF_CHOOSEFOLDER 8		/* choosing a folder only */
 #define FRF_FILTERISINITIAL 16	/* filter is initial directory */
 #define FRF_NOASKOVERWRITE 32	/* don't ask to overwrite existing files */
 #define FRF_EXTENSIONS 64		/* specify file extensions to be displayed */
+#define FRF_MIMETYPES 128		/* specify file mimetypes to be displayed */
 void fe_get_file (const char *title, char *initial,
 				 void (*callback) (void *userdata, char *file), void *userdata,
 				 int flags);
@@ -158,5 +180,7 @@ typedef enum
 void fe_tray_set_icon (feicon icon);
 void fe_tray_set_tooltip (const char *text);
 void fe_tray_set_balloon (const char *title, const char *text);
+void fe_open_chan_list (server *serv, char *filter, int do_refresh);
+const char *fe_get_default_font ();
 
 #endif

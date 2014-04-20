@@ -1,4 +1,5 @@
-/* HexChat Theme Manager
+/**
+ * HexChat Theme Manager
  *
  * Copyright (C) 2012 Patrick Griffs
  * Copyright (C) 2012 Berke Viktor
@@ -188,6 +189,10 @@ namespace thememan
                 if (File.Exists(Path.Combine(themedir, themelist.SelectedItem.ToString(), "pevents.conf")))
                 {
                     File.Copy(Path.Combine(themedir, themelist.SelectedItem.ToString(), "pevents.conf"), Path.Combine(hexchatdir, "pevents.conf"), true);
+                }
+                else if (File.Exists(Path.Combine(hexchatdir, "pevents.conf")))
+                {
+                    File.Delete(Path.Combine(hexchatdir, "pevents.conf"));
                 }
             }
         }

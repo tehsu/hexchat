@@ -1,3 +1,22 @@
+/* HexChat
+ * Copyright (C) 1998-2010 Peter Zelezny.
+ * Copyright (C) 2009-2013 Berke Viktor.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ */
+
 #ifdef WIN32
 #include "../../config-win32.h"
 #else
@@ -11,6 +30,13 @@
 
 #ifndef HEXCHAT_H
 #define HEXCHAT_H
+
+#ifdef USE_OPENSSL
+#ifdef __APPLE__
+#define __AVAILABILITYMACROS__
+#define DEPRECATED_IN_MAC_OS_X_VERSION_10_7_AND_LATER
+#endif
+#endif
 
 #include "history.h"
 
@@ -115,7 +141,6 @@ struct hexchatprefs
 	/* BOOLEANS */
 	unsigned int hex_away_auto_unmark;
 	unsigned int hex_away_omit_alerts;
-	unsigned int hex_away_show_message;
 	unsigned int hex_away_show_once;
 	unsigned int hex_away_track;
 	unsigned int hex_completion_auto;
@@ -131,7 +156,9 @@ struct hexchatprefs
 	unsigned int hex_gui_autoopen_recv;
 	unsigned int hex_gui_autoopen_send;
 	unsigned int hex_gui_compact;
+	unsigned int hex_gui_focus_omitalerts;
 	unsigned int hex_gui_hide_menu;
+	unsigned int hex_gui_input_attr;
 	unsigned int hex_gui_input_icon;
 	unsigned int hex_gui_input_nick;
 	unsigned int hex_gui_input_spell;
@@ -146,6 +173,7 @@ struct hexchatprefs
 	unsigned int hex_gui_tab_dialogs;
 	unsigned int hex_gui_tab_dots;
 	unsigned int hex_gui_tab_icons;
+	unsigned int hex_gui_tab_scrollchans;
 	unsigned int hex_gui_tab_server;
 	unsigned int hex_gui_tab_sort;
 	unsigned int hex_gui_tab_utils;
@@ -187,6 +215,7 @@ struct hexchatprefs
 	unsigned int hex_input_tray_priv;
 	unsigned int hex_irc_auto_rejoin;
 	unsigned int hex_irc_conf_mode;
+	unsigned int hex_irc_hidehost;
 	unsigned int hex_irc_hide_version;
 	unsigned int hex_irc_invisible;
 	unsigned int hex_irc_logging;
@@ -196,6 +225,7 @@ struct hexchatprefs
 	unsigned int hex_irc_wallops;
 	unsigned int hex_irc_who_join;
 	unsigned int hex_irc_whois_front;
+	unsigned int hex_irc_cap_server_time;
 	unsigned int hex_net_auto_reconnect;
 	unsigned int hex_net_auto_reconnectonfail;
 	unsigned int hex_net_proxy_auth;
@@ -211,7 +241,6 @@ struct hexchatprefs
 	unsigned int hex_text_indent;
 	unsigned int hex_text_replay;
 	unsigned int hex_text_search_case_match;
-	unsigned int hex_text_search_backward;
 	unsigned int hex_text_search_highlight_all;
 	unsigned int hex_text_search_follow;
 	unsigned int hex_text_search_regexp;
@@ -258,17 +287,20 @@ struct hexchatprefs
 	int hex_gui_pane_left_size;
 	int hex_gui_pane_right_size;
 	int hex_gui_pane_right_size_min;
+	int hex_gui_search_pos;
 	int hex_gui_slist_select;
 	int hex_gui_tab_layout;
 	int hex_gui_tab_newtofront;
 	int hex_gui_tab_pos;
 	int hex_gui_tab_small;
 	int hex_gui_tab_trunc;
+	int hex_gui_transparency;
 	int hex_gui_throttlemeter;
 	int hex_gui_ulist_pos;
 	int hex_gui_ulist_sort;
 	int hex_gui_url_mod;
 	int hex_gui_win_height;
+	int hex_gui_win_fullscreen;
 	int hex_gui_win_left;
 	int hex_gui_win_state;
 	int hex_gui_win_top;
@@ -285,9 +317,6 @@ struct hexchatprefs
 	int hex_notify_timeout;
 	int hex_text_max_indent;
 	int hex_text_max_lines;
-	int hex_text_tint_blue;
-	int hex_text_tint_green;
-	int hex_text_tint_red;
 	int hex_url_grabber_limit;
 
 	/* STRINGS */
@@ -296,7 +325,6 @@ struct hexchatprefs
 	char hex_dcc_completed_dir[PATHLEN + 1];
 	char hex_dcc_dir[PATHLEN + 1];
 	char hex_dcc_ip[DOMAINLEN + 1];
-	char hex_dnsprogram[72];
 	char hex_gui_ulist_doubleclick[256];
 	char hex_input_command_char[4];
 	char hex_irc_extra_hilight[300];
@@ -316,8 +344,6 @@ struct hexchatprefs
 	char hex_net_proxy_host[64];
 	char hex_net_proxy_pass[32];
 	char hex_net_proxy_user[32];
-	char hex_sound_command[PATHLEN + 1];
-	char hex_sound_dir[PATHLEN + 1];
 	char hex_stamp_log_format[64];
 	char hex_stamp_text_format[64];
 	char hex_text_background[PATHLEN + 1];
@@ -381,6 +407,7 @@ typedef struct session
 	guint8 text_hidejoinpart;
 	guint8 text_logging;
 	guint8 text_scrollback;
+	guint8 text_strip;
 
 	struct server *server;
 	void *usertree_alpha;			/* pure alphabetical tree */
@@ -432,6 +459,7 @@ typedef struct session
 	int doing_who:1;		/* /who sent on this channel */
 	int done_away_check:1;	/* done checking for away status changes */
 	gtk_xtext_search_flags lastlog_flags;
+	void (*scrollback_replay_marklast) (struct session *sess);
 } session;
 
 struct msproxy_state_t
@@ -441,6 +469,12 @@ struct msproxy_state_t
 	unsigned char		seq_recv;		/* seq number of last packet recv.	*/
 	unsigned char		seq_sent;		/* seq number of last packet sent.	*/
 };
+
+/* SASL Mechanisms */
+#define MECH_PLAIN 0
+#define MECH_BLOWFISH 1
+#define MECH_AES 2
+#define MECH_EXTERNAL 3
 
 typedef struct server
 {
@@ -462,7 +496,7 @@ typedef struct server
 	void (*p_ns_identify)(struct server *, char *pass);
 	void (*p_ns_ghost)(struct server *, char *usname, char *pass);
 	void (*p_join)(struct server *, char *channel, char *key);
-	void (*p_join_list)(struct server *, GSList *channels, GSList *keys);
+	void (*p_join_list)(struct server *, GSList *favorites);
 	void (*p_login)(struct server *, char *user, char *realname);
 	void (*p_join_info)(struct server *, char *channel);
 	void (*p_mode)(struct server *, char *target, char *mode);
@@ -510,14 +544,12 @@ typedef struct server
 	char hostname[128];				/* real ip number */
 	char servername[128];			/* what the server says is its name */
 	char password[86];
-	char sasluser[32];				/* this is just a buffer for network->user */
-	char saslpassword[86];			/* we could reuse password but then we couldn't guarantee NickServ doesn't register first */
 	char nick[NICKLEN];
 	char linebuf[2048];				/* RFC says 512 chars including \r\n */
 	char *last_away_reason;
 	int pos;								/* current position in linebuf */
 	int nickcount;
-	int nickservtype;					/* 0=/MSG nickserv 1=/NICKSERV 2=/NS */
+	int loginmethod;					/* see login_types[] */
 
 	char *chantypes;					/* for 005 numeric - free me */
 	char *chanmodes;					/* for 005 numeric - free me */
@@ -546,12 +578,12 @@ typedef struct server
 	time_t msg_last_time;
 
 	/*time_t connect_time;*/				/* when did it connect? */
-	time_t lag_sent;
+	unsigned long lag_sent;   /* we are still waiting for this ping response*/
 	time_t ping_recv;					/* when we last got a ping reply */
 	time_t away_time;					/* when we were marked away */
 
 	char *encoding;					/* NULL for system */
-	char *autojoin;			/* list of channels & keys to join */
+	GSList *favlist;			/* list of channels & keys to join */
 
 	unsigned int motd_skipped:1;
 	unsigned int connected:1;
@@ -561,6 +593,7 @@ typedef struct server
 	unsigned int skip_next_whois:1;	/* hide whois output */
 	unsigned int inside_whois:1;
 	unsigned int doing_dns:1;			/* /dns has been done */
+	unsigned int retry_sasl:1;		/* retrying another sasl mech */
 	unsigned int end_of_motd:1;		/* end of motd reached (logged in) */
 	unsigned int sent_quit:1;			/* sent a QUIT already? */
 	unsigned int use_listargs:1;		/* undernet and dalnet need /list >0,<10000 */
@@ -568,17 +601,26 @@ typedef struct server
 	unsigned int reconnect_away:1;	/* whether to reconnect in is_away state */
 	unsigned int dont_use_proxy:1;	/* to proxy or not to proxy */
 	unsigned int supports_watch:1;	/* supports the WATCH command */
+	unsigned int supports_monitor:1;	/* supports the MONITOR command */
 	unsigned int bad_prefix:1;			/* gave us a bad PREFIX= 005 number */
 	unsigned int have_namesx:1;		/* 005 tokens NAMESX and UHNAMES */
+	unsigned int have_awaynotify:1;
 	unsigned int have_uhnames:1;
 	unsigned int have_whox:1;		/* have undernet's WHOX features */
 	unsigned int have_idmsg:1;		/* freenode's IDENTIFY-MSG */
+	unsigned int have_accnotify:1; /* cap account-notify */
+	unsigned int have_extjoin:1;	/* cap extended-join */
+	unsigned int have_server_time:1;	/* cap server-time */
 	unsigned int have_sasl:1;		/* SASL capability */
 	unsigned int have_except:1;	/* ban exemptions +e */
 	unsigned int have_invite:1;	/* invite exemptions +I */
+	unsigned int have_cert:1;	/* have loaded a cert */
 	unsigned int using_cp1255:1;	/* encoding is CP1255/WINDOWS-1255? */
 	unsigned int using_irc:1;		/* encoding is "IRC" (CP1252/UTF-8 hybrid)? */
 	unsigned int use_who:1;			/* whether to use WHO command to get dcc_ip */
+	unsigned int sasl_mech;			/* mechanism for sasl auth */
+	unsigned int sent_saslauth:1;	/* have sent AUTHENICATE yet */
+	unsigned int sent_capend:1;	/* have sent CAP END yet */
 #ifdef USE_OPENSSL
 	unsigned int use_ssl:1;				  /* is server SSL capable? */
 	unsigned int accept_invalid_cert:1;/* ignore result of server's cert. verify */

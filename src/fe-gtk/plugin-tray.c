@@ -1,4 +1,20 @@
-/* Copyright (C) 2006-2007 Peter Zelezny. */
+/* X-Chat
+ * Copyright (C) 2006-2007 Peter Zelezny.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ */
 
 #include <string.h>
 #include "../common/hexchat-plugin.h"
@@ -13,7 +29,6 @@
 #include "pixmaps.h"
 #include "maingui.h"
 #include "menu.h"
-#include <gtk/gtk.h>
 
 #ifndef WIN32
 #include <unistd.h>
@@ -136,7 +151,7 @@ void
 fe_tray_set_tooltip (const char *text)
 {
 	if (sticon)
-		gtk_status_icon_set_tooltip (sticon, text);
+		gtk_status_icon_set_tooltip_text (sticon, text);
 }
 
 void
@@ -152,7 +167,8 @@ fe_tray_set_balloon (const char *title, const char *text)
 
 	/* no balloons if the window is focused */
 	ws = tray_get_window_status ();
-	if (ws == WS_FOCUSED)
+	if ((prefs.hex_away_omit_alerts && hexchat_get_info(ph, "away")) ||
+		(prefs.hex_gui_focus_omitalerts && ws == WS_FOCUSED))
 		return;
 
 	/* bit 1 of flags means "no balloons unless hidden/iconified" */
@@ -164,13 +180,23 @@ fe_tray_set_balloon (const char *title, const char *text)
 		return;
 
 #ifdef USE_LIBNOTIFY
+	static int notify_text_strip_flags = STRIP_ALL;
 	NotifyNotification *notification;
 	char *notify_text, *notify_title;
 
 	if (!notify_is_initted())
+	{
 		notify_init(PACKAGE_NAME);
 
-	notify_text = strip_color (text, -1, STRIP_ALL|STRIP_ESCMARKUP);
+		GList* server_caps = notify_get_server_caps ();
+		if (g_list_find_custom (server_caps, "body-markup", (GCompareFunc)strcmp))
+		{
+			notify_text_strip_flags |= STRIP_ESCMARKUP;
+		}
+		g_list_free_full (server_caps, g_free);
+	}
+
+	notify_text = strip_color (text, -1, notify_text_strip_flags);
 	notify_title = strip_color (title, -1, STRIP_ALL);
 
 	notification = XC_NOTIFY_NEW (notify_title, notify_text, HEXCHATSHAREDIR "/icons/hicolor/scalable/apps/hexchat.svg", NULL);
@@ -382,6 +408,7 @@ tray_toggle_visibility (gboolean force_hide)
 	static int x, y;
 	static GdkScreen *screen;
 	static int maximized;
+	static int fullscreen;
 	GtkWindow *win;
 
 	if (!sticon)
@@ -398,17 +425,14 @@ tray_toggle_visibility (gboolean force_hide)
 	if (!win)
 		return FALSE;
 
-#if GTK_CHECK_VERSION(2,20,0)
 	if (force_hide || gtk_widget_get_visible (GTK_WIDGET (win)))
-#else
-	if (force_hide || GTK_WIDGET_VISIBLE (win))
-#endif
 	{
 		if (prefs.hex_gui_tray_away)
 			hexchat_command (ph, "ALLSERV AWAY");
 		gtk_window_get_position (win, &x, &y);
 		screen = gtk_window_get_screen (win);
 		maximized = prefs.hex_gui_win_state;
+		fullscreen = prefs.hex_gui_win_fullscreen;
 		gtk_widget_hide (GTK_WIDGET (win));
 	}
 	else
@@ -419,6 +443,8 @@ tray_toggle_visibility (gboolean force_hide)
 		gtk_window_move (win, x, y);
 		if (maximized)
 			gtk_window_maximize (win);
+		if (fullscreen)
+			gtk_window_fullscreen (win);
 		gtk_widget_show (GTK_WIDGET (win));
 		gtk_window_present (win);
 	}
@@ -529,7 +555,7 @@ tray_make_item (GtkWidget *menu, char *label, void *callback, void *userdata)
 static void
 tray_toggle_cb (GtkCheckMenuItem *item, unsigned int *setting)
 {
-	*setting = item->active;
+	*setting = gtk_check_menu_item_get_active (item);
 }
 
 static void
@@ -678,7 +704,7 @@ tray_hilight_cb (char *word[], void *userdata)
 	/*if (tray_status == TS_HIGHLIGHT)
 		return HEXCHAT_EAT_NONE;*/
 
-	if (prefs.hex_input_tray_hilight && (!prefs.hex_away_omit_alerts || tray_find_away_status () != 1))
+	if (prefs.hex_input_tray_hilight)
 	{
 		tray_set_flash (ICON_HILIGHT);
 
@@ -692,8 +718,8 @@ tray_hilight_cb (char *word[], void *userdata)
 								tray_hilight_count, word[1], hexchat_get_info (ph, "channel"));
 	}
 
-	if (prefs.hex_input_balloon_hilight && (!prefs.hex_away_omit_alerts || tray_find_away_status () != 1))
-		tray_set_balloonf (word[2], _(DISPLAY_NAME": Highlighted message from: %s (%s)"),
+	if (prefs.hex_input_balloon_hilight)
+		tray_set_balloonf (word[2], _("Highlighted message from: %s (%s)"),
 								 word[1], hexchat_get_info (ph, "channel"));
 
 	return HEXCHAT_EAT_NONE;
@@ -704,21 +730,21 @@ tray_message_cb (char *word[], void *userdata)
 {
 	if (/*tray_status == TS_MESSAGE ||*/ tray_status == TS_HIGHLIGHT)
 		return HEXCHAT_EAT_NONE;
-
-	if (prefs.hex_input_tray_chans && (!prefs.hex_away_omit_alerts || tray_find_away_status () != 1))
+		
+	if (prefs.hex_input_tray_chans)
 	{
 		tray_set_flash (ICON_MSG);
 
 		tray_pub_count++;
 		if (tray_pub_count == 1)
-			tray_set_tipf (_(DISPLAY_NAME": New public message from: %s (%s)"),
+			tray_set_tipf (_(DISPLAY_NAME": Channel message from: %s (%s)"),
 								word[1], hexchat_get_info (ph, "channel"));
 		else
-			tray_set_tipf (_(DISPLAY_NAME": %u new public messages."), tray_pub_count);
+			tray_set_tipf (_(DISPLAY_NAME": %u channel messages."), tray_pub_count);
 	}
 
-	if (prefs.hex_input_balloon_chans && (!prefs.hex_away_omit_alerts || tray_find_away_status () != 1))
-		tray_set_balloonf (word[2], _(DISPLAY_NAME": New public message from: %s (%s)"),
+	if (prefs.hex_input_balloon_chans)
+		tray_set_balloonf (word[2], _("Channel message from: %s (%s)"),
 								 word[1], hexchat_get_info (ph, "channel"));
 
 	return HEXCHAT_EAT_NONE;
@@ -732,33 +758,32 @@ tray_priv (char *from, char *text)
 	if (alert_match_word (from, prefs.hex_irc_no_hilight))
 		return;
 
-	tray_set_flash (ICON_MSG);
-
 	network = hexchat_get_info (ph, "network");
 	if (!network)
 		network = hexchat_get_info (ph, "server");
 
-	tray_priv_count++;
-	if (tray_priv_count == 1)
-		tray_set_tipf (_(DISPLAY_NAME": Private message from: %s (%s)"),
-							from, network);
-	else
-		tray_set_tipf (_(DISPLAY_NAME": %u private messages, latest from: %s (%s)"),
-							tray_priv_count, from, network);
+	if (prefs.hex_input_tray_priv)
+	{
+		tray_set_flash (ICON_MSG);
 
-	if (prefs.hex_input_balloon_priv && (!prefs.hex_away_omit_alerts || tray_find_away_status () != 1))
-		tray_set_balloonf (text, _(DISPLAY_NAME": Private message from: %s (%s)"),
+		tray_priv_count++;
+		if (tray_priv_count == 1)
+			tray_set_tipf (_(DISPLAY_NAME": Private message from: %s (%s)"),
+								from, network);
+		else
+			tray_set_tipf (_(DISPLAY_NAME": %u private messages, latest from: %s (%s)"),
+								tray_priv_count, from, network);
+	}
+
+	if (prefs.hex_input_balloon_priv)
+		tray_set_balloonf (text, _("Private message from: %s (%s)"),
 								 from, network);
 }
 
 static int
 tray_priv_cb (char *word[], void *userdata)
 {
-	/*if (tray_status == TS_HIGHLIGHT)
-		return HEXCHAT_EAT_NONE;*/
-
-	if (prefs.hex_input_tray_priv && (!prefs.hex_away_omit_alerts || tray_find_away_status () != 1))
-		tray_priv (word[1], word[2]);
+	tray_priv (word[1], word[2]);
 
 	return HEXCHAT_EAT_NONE;
 }
@@ -766,10 +791,7 @@ tray_priv_cb (char *word[], void *userdata)
 static int
 tray_invited_cb (char *word[], void *userdata)
 {
-	/*if (tray_status == TS_HIGHLIGHT)
-		return HEXCHAT_EAT_NONE;*/
-
-	if (prefs.hex_input_tray_priv && (!prefs.hex_away_omit_alerts || tray_find_away_status () != 1))
+	if (!prefs.hex_away_omit_alerts || tray_find_away_status () != 1)
 		tray_priv (word[2], "Invited");
 
 	return HEXCHAT_EAT_NONE;
@@ -801,7 +823,7 @@ tray_dcc_cb (char *word[], void *userdata)
 	}
 
 	if (prefs.hex_input_balloon_priv && (!prefs.hex_away_omit_alerts || tray_find_away_status () != 1))
-		tray_set_balloonf ("", _(DISPLAY_NAME": File offer from: %s (%s)"),
+		tray_set_balloonf ("", _("File offer from: %s (%s)"),
 								word[1], network);
 
 	return HEXCHAT_EAT_NONE;
@@ -837,7 +859,7 @@ tray_apply_setup (void)
 	}
 	else
 	{
-		if (prefs.hex_gui_tray && !hextray_mode () && !unity_mode ())
+		if (prefs.hex_gui_tray && !unity_mode ())
 			tray_init ();
 	}
 }
@@ -869,7 +891,7 @@ tray_plugin_init (hexchat_plugin *plugin_handle, char **plugin_name,
 
 	hexchat_hook_print (ph, "Focus Window", -1, tray_focus_cb, NULL);
 
-	if (prefs.hex_gui_tray && !hextray_mode () && !unity_mode ())
+	if (prefs.hex_gui_tray && !unity_mode ())
 		tray_init ();
 
 	return 1;       /* return 1 for success */

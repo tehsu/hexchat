@@ -22,16 +22,6 @@
 
 #include "fe-gtk.h"
 
-#include <gtk/gtkbox.h>
-#include <gtk/gtklabel.h>
-#include <gtk/gtkdnd.h>
-#include <gtk/gtkentry.h>
-#include <gtk/gtktreeview.h>
-#include <gtk/gtktreeselection.h>
-#include <gtk/gtkscrolledwindow.h>
-#include <gtk/gtkcellrendererpixbuf.h>
-#include <gtk/gtkcellrenderertext.h>
-#include <gtk/gtkliststore.h>
 #include <gdk/gdkkeysyms.h>
 
 #include "../common/hexchat.h"
@@ -49,11 +39,6 @@
 #include "pixmaps.h"
 #include "userlistgui.h"
 #include "fkeys.h"
-
-#ifdef USE_GTKSPELL
-#include <gtk/gtktextview.h>
-#endif
-
 
 enum
 {
@@ -289,7 +274,7 @@ userlist_set_value (GtkWidget *treeview, gfloat val)
 gfloat
 userlist_get_value (GtkWidget *treeview)
 {
-	return gtk_tree_view_get_vadjustment (GTK_TREE_VIEW (treeview))->value;
+	return gtk_adjustment_get_value (gtk_tree_view_get_vadjustment (GTK_TREE_VIEW (treeview)));
 }
 
 int
@@ -335,7 +320,7 @@ fe_userlist_rehash (session *sess, struct User *user)
 	if (!iter)
 		return;
 
-	if (prefs.hex_away_track && prefs.hex_away_size_max && user->away)
+	if (prefs.hex_away_track && user->away)
 		nick_color = COL_AWAY;
 	else if (prefs.hex_gui_ulist_color)
 		nick_color = text_color_of(user->nick);
@@ -355,7 +340,7 @@ fe_userlist_insert (session *sess, struct User *newuser, int row, int sel)
 	char *nick;
 	int nick_color = 0;
 
-	if (prefs.hex_away_track && prefs.hex_away_size_max && newuser->away)
+	if (prefs.hex_away_track && newuser->away)
 		nick_color = COL_AWAY;
 	else if (prefs.hex_gui_ulist_color)
 		nick_color = text_color_of(newuser->nick);
@@ -440,7 +425,7 @@ userlist_dnd_drop (GtkTreeView *widget, GdkDragContext *context,
 		return;
 	gtk_tree_model_get (model, &iter, COL_USER, &user, -1);
 
-	mg_dnd_drop_file (current_sess, user->nick, selection_data->data);
+	mg_dnd_drop_file (current_sess, user->nick, (char *)gtk_selection_data_get_data (selection_data));
 }
 
 static gboolean
@@ -594,7 +579,7 @@ userlist_click_cb (GtkWidget *widget, GdkEventButton *event, gpointer userdata)
 static gboolean
 userlist_key_cb (GtkWidget *wid, GdkEventKey *evt, gpointer userdata)
 {
-	if (evt->keyval >= GDK_asterisk && evt->keyval <= GDK_z)
+	if (evt->keyval >= GDK_KEY_asterisk && evt->keyval <= GDK_KEY_z)
 	{
 		/* dirty trick to avoid auto-selection */
 		SPELL_ENTRY_SET_EDITABLE (current_sess->gui->input_box, FALSE);

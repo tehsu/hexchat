@@ -32,7 +32,6 @@
 #endif
 #include <sys/types.h>
 #include <ctype.h>
-#include <glib.h>
 #include <glib-object.h>
 #include "../common/hexchat.h"
 #include "../common/hexchatc.h"
@@ -100,7 +99,7 @@ fe_new_window (struct session *sess, int focus)
 				" \017This binary compiled \00310"__DATE__"\017\n",
 				get_sys_str (1),
 				glib_major_version, glib_minor_version, glib_micro_version);
-	fe_print_text (sess, buf, 0);
+	fe_print_text (sess, buf, 0, FALSE);
 
 	fe_print_text (sess, "\n\nCompiled in Features\0032:\017 "
 #ifdef USE_PLUGIN
@@ -115,14 +114,14 @@ fe_new_window (struct session *sess, int focus)
 #ifdef USE_IPV6
 	"IPv6"
 #endif
-	"\n\n", 0);
+	"\n\n", 0, FALSE);
 	fflush (stdout);
 }
 
 static int
 get_stamp_str (time_t tim, char *dest, int size)
 {
-	return strftime (dest, size, prefs.hex_stamp_text_format, localtime (&tim));
+	return strftime_validated (dest, size, prefs.hex_stamp_text_format, localtime (&tim));
 }
 
 static int
@@ -145,7 +144,8 @@ timecat (char *buf, time_t stamp)
 static const short colconv[] = { 0, 7, 4, 2, 1, 3, 5, 11, 13, 12, 6, 16, 14, 15, 10, 7 };
 
 void
-fe_print_text (struct session *sess, char *text, time_t stamp)
+fe_print_text (struct session *sess, char *text, time_t stamp,
+			   gboolean no_activity)
 {
 	int dotime = FALSE;
 	char num[8];
@@ -313,7 +313,8 @@ fe_print_text (struct session *sess, char *text, time_t stamp)
 #else
 /* The win32 version for cmd.exe */
 void
-fe_print_text (struct session *sess, char *text, time_t stamp)
+fe_print_text (struct session *sess, char *text, time_t stamp,
+			   gboolean no_activity)
 {
 	int dotime = FALSE;
 	int comma, k, i = 0, j = 0, len = strlen (text);
@@ -466,8 +467,9 @@ static const GOptionEntry gopt_entries[] =
  {"no-plugins",	'n', 0, G_OPTION_ARG_NONE,	&arg_skip_plugins, N_("Don't auto load any plugins"), NULL},
  {"plugindir",	'p', 0, G_OPTION_ARG_NONE,	&arg_show_autoload, N_("Show plugin/script auto-load directory"), NULL},
  {"configdir",	'u', 0, G_OPTION_ARG_NONE,	&arg_show_config, N_("Show user config directory"), NULL},
- {"url",	 0,  0, G_OPTION_ARG_STRING,	&arg_url, N_("Open an irc://server:port/channel URL"), "URL"},
+ {"url",	 0,  G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_STRING,	&arg_url, N_("Open an irc://server:port/channel URL"), "URL"},
  {"version",	'v', 0, G_OPTION_ARG_NONE,	&arg_show_version, N_("Show version information"), NULL},
+ {G_OPTION_REMAINING, '\0', 0, G_OPTION_ARG_STRING_ARRAY, &arg_urls, N_("Open an irc://server:port/channel?key URL"), "URL"},
  {NULL}
 };
 
@@ -486,8 +488,6 @@ fe_args (int argc, char *argv[])
 	context = g_option_context_new (NULL);
 	g_option_context_add_main_entries (context, gopt_entries, GETTEXT_PACKAGE);
 	g_option_context_parse (context, &argc, &argv, &error);
-	
-	g_type_init ();
 
 	if (error)
 	{
@@ -517,7 +517,7 @@ fe_args (int argc, char *argv[])
 		}
 		free (exe);
 #else
-		printf ("%s\n", HEXCHATLIBDIR"/plugins");
+		printf ("%s\n", HEXCHATLIBDIR);
 #endif
 		return 0;
 	}
@@ -654,10 +654,12 @@ fe_chan_list_end (struct server *serv)
 gboolean
 fe_add_ban_list (struct session *sess, char *mask, char *who, char *when, int rplcode)
 {
+	return 0;
 }
 gboolean
 fe_ban_list_end (struct session *sess, int rplcode)
 {
+	return 0;
 }
 void
 fe_notify_update (char *name)
@@ -800,7 +802,7 @@ fe_lastlog (session *sess, session *lastlog_sess, char *sstr, gtk_xtext_search_f
 {
 }
 void
-fe_set_lag (server * serv, int lag)
+fe_set_lag (server * serv, long lag)
 {
 }
 void
@@ -813,6 +815,10 @@ fe_set_away (server *serv)
 }
 void
 fe_serverlist_open (session *sess)
+{
+}
+void
+fe_get_bool (char *title, char *prompt, void *callback, void *userdata)
 {
 }
 void
@@ -906,3 +912,13 @@ void fe_tray_set_icon (feicon icon){}
 void fe_tray_set_tooltip (const char *text){}
 void fe_tray_set_balloon (const char *title, const char *text){}
 void fe_userlist_update (session *sess, struct User *user){}
+void
+fe_open_chan_list (server *serv, char *filter, int do_refresh)
+{
+	serv->p_list_channels (serv, filter, 1);
+}
+const char *
+fe_get_default_font (void)
+{
+	return NULL;
+}

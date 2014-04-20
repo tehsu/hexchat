@@ -51,8 +51,12 @@
 #include "url.h"
 #include "hexchatc.h"
 
+#if ! GLIB_CHECK_VERSION (2, 36, 0)
+#include <glib-object.h>			/* for g_type_init() */
+#endif
+
 #ifdef USE_OPENSSL
-#include <openssl/ssl.h>		  /* SSL_() */
+#include <openssl/ssl.h>			/* SSL_() */
 #include "ssl.h"
 #endif
 
@@ -101,6 +105,7 @@ int hexchat_is_quitting = FALSE;
 int arg_dont_autoconnect = FALSE;
 int arg_skip_plugins = FALSE;
 char *arg_url = NULL;
+char **arg_urls = NULL;
 char *arg_command = NULL;
 gint arg_existing = FALSE;
 
@@ -227,7 +232,7 @@ find_channel (server *serv, char *chan)
 	while (list)
 	{
 		sess = list->data;
-		if ((!serv || serv == sess->server) && sess->type != SESS_DIALOG)
+		if ((!serv || serv == sess->server) && sess->type == SESS_CHANNEL)
 		{
 			if (!serv->p_cmp (chan, sess->channel))
 				return sess;
@@ -285,8 +290,12 @@ lag_check (void)
 			{
 				snprintf (tbuf, sizeof (tbuf), "LAG%lu", tim);
 				serv->p_ping (serv, "", tbuf);
-				serv->lag_sent = tim;
-				fe_set_lag (serv, -1);
+				
+				if (!serv->lag_sent)
+				{
+					serv->lag_sent = tim;
+					fe_set_lag (serv, -1);
+				}
 			}
 		}
 		list = list->next;
@@ -300,7 +309,7 @@ away_check (void)
 	GSList *list;
 	int full, sent, loop = 0;
 
-	if (!prefs.hex_away_track || prefs.hex_away_size_max < 1)
+	if (!prefs.hex_away_track)
 		return 1;
 
 doover:
@@ -315,7 +324,7 @@ doover:
 		if (sess->server->connected &&
 			 sess->type == SESS_CHANNEL &&
 			 sess->channel[0] &&
-			 sess->total <= prefs.hex_away_size_max)
+			 (sess->total <= prefs.hex_away_size_max || !prefs.hex_away_size_max))
 		{
 			if (!sess->done_away_check)
 			{
@@ -336,14 +345,15 @@ doover:
 		list = list->next;
 	}
 
-	/* done them all, reset done_away_check to FALSE and start over */
+	/* done them all, reset done_away_check to FALSE and start over unless we have away-notify */
 	if (full)
 	{
 		list = sess_list;
 		while (list)
 		{
 			sess = list->data;
-			sess->done_away_check = FALSE;
+			if (!sess->server->have_awaynotify)
+				sess->done_away_check = FALSE;
 			list = list->next;
 		}
 		loop++;
@@ -395,6 +405,7 @@ irc_init (session *sess)
 {
 	static int done_init = FALSE;
 	char *buf;
+	int i;
 
 	if (done_init)
 		return;
@@ -426,16 +437,26 @@ irc_init (session *sess)
 		handle_command (sess, buf, FALSE);
 		g_free (buf);
 	}
+	
+	if (arg_urls != NULL)
+	{
+		for (i = 0; i < g_strv_length(arg_urls); i++)
+		{
+			buf = g_strdup_printf ("%s %s", i==0? "server" : "newserver", arg_urls[i]);
+			handle_command (sess, buf, FALSE);
+			g_free (buf);
+		}
+		g_strfreev (arg_urls);
+	}
 
 	if (arg_command != NULL)
 	{
+		handle_command (sess, arg_command, FALSE);
 		g_free (arg_command);
 	}
 
 	/* load -e <xdir>/startup.txt */
-	buf = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "startup.txt", get_xdir ());
-	load_perform_file (sess, buf);
-	g_free (buf);
+	load_perform_file (sess, "startup.txt");
 }
 
 static session *
@@ -462,6 +483,7 @@ session_new (server *serv, char *from, int type, int focus)
 	sess->text_hidejoinpart = SET_DEFAULT;
 	sess->text_logging = SET_DEFAULT;
 	sess->text_scrollback = SET_DEFAULT;
+	sess->text_strip = SET_DEFAULT;
 
 	sess->lastact_idx = LACT_NONE;
 
@@ -504,8 +526,10 @@ new_ircwindow (server *serv, char *name, int type, int focus)
 	}
 
 	irc_init (sess);
-	scrollback_load (sess);
 	chanopt_load (sess);
+	scrollback_load (sess);
+	if (sess->scrollwritten && sess->scrollback_replay_marklast)
+		sess->scrollback_replay_marklast (sess);
 	plugin_emit_dummy_print (sess, "Open Context");
 
 	return sess;
@@ -701,6 +725,7 @@ static char defaultconf_commands[] =
 	"NAME KILL\n"			"CMD quote KILL %2 :&3\n\n"\
 	"NAME LEAVE\n"			"CMD part &2\n\n"\
 	"NAME M\n"				"CMD msg &2\n\n"\
+	"NAME OMSG\n"			"CMD msg @%c &2\n\n"\
 	"NAME ONOTICE\n"		"CMD notice @%c &2\n\n"\
 	"NAME RAW\n"			"CMD quote &2\n\n"\
 	"NAME SERVHELP\n"		"CMD quote HELP\n\n"\
@@ -717,7 +742,7 @@ static char defaultconf_commands[] =
 	"NAME WII\n"			"CMD quote WHOIS %2 %2\n\n";
 
 static char defaultconf_urlhandlers[] =
-		"NAME Open Link in Opera\n"		"CMD !opera -remote 'openURL(%s)'\n\n";
+		"NAME Open Link in a new Firefox Window\n"		"CMD !firefox -new-window %s\n\n";
 
 #ifdef USE_SIGACTION
 /* Close and open log files on SIGUSR1. Usefull for log rotating */
@@ -919,17 +944,17 @@ xchat_init (void)
 	servlist_init ();							/* load server list */
 
 	/* if we got a URL, don't open the server list GUI */
-	if (!prefs.hex_gui_slist_skip && !arg_url)
+	if (!prefs.hex_gui_slist_skip && !arg_url && !arg_urls)
 		fe_serverlist_open (NULL);
 
-	/* turned OFF via -a arg */
-	if (!arg_dont_autoconnect)
+	/* turned OFF via -a arg or by passing urls */
+	if (!arg_dont_autoconnect && !arg_urls)
 	{
 		/* do any auto connects */
 		if (!servlist_have_auto ())	/* if no new windows open .. */
 		{
 			/* and no serverlist gui ... */
-			if (prefs.hex_gui_slist_skip || arg_url)
+			if (prefs.hex_gui_slist_skip || arg_url || arg_urls)
 				/* we'll have to open one. */
 				new_ircwindow (NULL, NULL, SESS_SERVER, 0);
 		} else
@@ -938,7 +963,7 @@ xchat_init (void)
 		}
 	} else
 	{
-		if (prefs.hex_gui_slist_skip || arg_url)
+		if (prefs.hex_gui_slist_skip || arg_url || arg_urls)
 			new_ircwindow (NULL, NULL, SESS_SERVER, 0);
 	}
 }
@@ -1008,56 +1033,28 @@ hexchat_execv (char * const argv[])
 #endif
 }
 
-#if 0 /* def WIN32 */
 static void
-xchat_restore_window (HWND hexchat_window)
+set_locale (void)
 {
-	/* ShowWindow (hexchat_window, SW_RESTORE); another way, but works worse */
-	SendMessage (hexchat_window, WM_SYSCOMMAND, SC_RESTORE, 0);
-	SetForegroundWindow (hexchat_window);
-}
+#ifdef WIN32
+	char hexchat_lang[13];	/* LC_ALL= plus 5 chars of hex_gui_lang and trailing \0 */
 
-BOOL CALLBACK
-enum_windows_impl (HWND current_window, LPARAM lParam)
-{
-	TCHAR window_name[8];
-	TCHAR module_path[1024];
-	ZeroMemory (&window_name, sizeof (window_name));
+	strcpy (hexchat_lang, "LC_ALL=");
 
-	if (!current_window)
-	{
-		return TRUE;
-	}
+	if (0 <= prefs.hex_gui_lang && prefs.hex_gui_lang < LANGUAGES_LENGTH)
+		strcat (hexchat_lang, languages[prefs.hex_gui_lang]);
+	else
+		strcat (hexchat_lang, "en");
 
-	GetWindowText (current_window, window_name, 8);		/* name length + 1 */
-	if (strcmp (window_name, "HexChat") == 0)
-	{
-		/* use a separate if block, this way we don't have to call GetWindowModuleFileName() for each hit */
-		ZeroMemory (&module_path, sizeof (module_path));
-		GetWindowModuleFileName (current_window, module_path, sizeof (module_path));
-
-		if (strstr (module_path, "hexchat.exe"))	/* We've found it, stop */
-		{
-			xchat_restore_window (current_window);
-			return FALSE;
-		}
-	}
-
-	return TRUE;								/* Keep searching */
-
-}
+	putenv (hexchat_lang);
 #endif
+}
 
 int
 main (int argc, char *argv[])
 {
 	int i;
 	int ret;
-
-#ifdef WIN32
-	char hexchat_lang[13];	/* LC_ALL= plus 5 chars of hex_gui_lang and trailing \0 */
-	/* HANDLE mutex; */
-#endif
 
 	srand (time (0));	/* CL: do this only once! */
 
@@ -1086,205 +1083,24 @@ main (int argc, char *argv[])
 		}
 	}
 
-	load_config ();
+#if ! GLIB_CHECK_VERSION (2, 36, 0)
+	g_type_init ();
+#endif
 
-#ifdef WIN32
+	if (check_config_dir () == 0)
+	{
+		if (load_config () != 0)
+			load_default_config ();
+	} else
+	{
+		/* this is probably the first run */
+		load_default_config ();
+		make_config_dirs ();
+		make_dcc_dirs ();
+	}
+
 	/* we MUST do this after load_config () AND before fe_init (thus gtk_init) otherwise it will fail */
-	strcpy (hexchat_lang, "LC_ALL=");
-
-	/* this must be ordered EXACTLY as langsmenu[] */
-	switch (prefs.hex_gui_lang)
-	{
-		case 0:
-			strcat (hexchat_lang, "af");
-			break;
-		case 1:
-			strcat (hexchat_lang, "sq");
-			break;
-		case 2:
-			strcat (hexchat_lang, "am");
-			break;
-		case 3:
-			strcat (hexchat_lang, "ast");
-			break;
-		case 4:
-			strcat (hexchat_lang, "az");
-			break;
-		case 5:
-			strcat (hexchat_lang, "eu");
-			break;
-		case 6:
-			strcat (hexchat_lang, "be");
-			break;
-		case 7:
-			strcat (hexchat_lang, "bg");
-			break;
-		case 8:
-			strcat (hexchat_lang, "ca");
-			break;
-		case 9:
-			strcat (hexchat_lang, "zh_CN");
-			break;
-		case 10:
-			strcat (hexchat_lang, "zh_TW");
-			break;
-		case 11:
-			strcat (hexchat_lang, "cs");
-			break;
-		case 12:
-			strcat (hexchat_lang, "da");
-			break;
-		case 13:
-			strcat (hexchat_lang, "nl");
-			break;
-		case 14:
-			strcat (hexchat_lang, "en_GB");
-			break;
-		case 15:
-			strcat (hexchat_lang, "en");
-			break;
-		case 16:
-			strcat (hexchat_lang, "et");
-			break;
-		case 17:
-			strcat (hexchat_lang, "fi");
-			break;
-		case 18:
-			strcat (hexchat_lang, "fr");
-			break;
-		case 19:
-			strcat (hexchat_lang, "gl");
-			break;
-		case 20:
-			strcat (hexchat_lang, "de");
-			break;
-		case 21:
-			strcat (hexchat_lang, "el");
-			break;
-		case 22:
-			strcat (hexchat_lang, "gu");
-			break;
-		case 23:
-			strcat (hexchat_lang, "hi");
-			break;
-		case 24:
-			strcat (hexchat_lang, "hu");
-			break;
-		case 25:
-			strcat (hexchat_lang, "id");
-			break;
-		case 26:
-			strcat (hexchat_lang, "it");
-			break;
-		case 27:
-			strcat (hexchat_lang, "ja");
-			break;
-		case 28:
-			strcat (hexchat_lang, "kn");
-			break;
-		case 29:
-			strcat (hexchat_lang, "rw");
-			break;
-		case 30:
-			strcat (hexchat_lang, "ko");
-			break;
-		case 31:
-			strcat (hexchat_lang, "lv");
-			break;
-		case 32:
-			strcat (hexchat_lang, "lt");
-			break;
-		case 33:
-			strcat (hexchat_lang, "mk");
-			break;
-		case 34:
-			strcat (hexchat_lang, "ml");
-			break;
-		case 35:
-			strcat (hexchat_lang, "ms");
-			break;
-		case 36:
-			strcat (hexchat_lang, "nb");
-			break;
-		case 37:
-			strcat (hexchat_lang, "no");
-			break;
-		case 38:
-			strcat (hexchat_lang, "pl");
-			break;
-		case 39:
-			strcat (hexchat_lang, "pt");
-			break;
-		case 40:
-			strcat (hexchat_lang, "pt_BR");
-			break;
-		case 41:
-			strcat (hexchat_lang, "pa");
-			break;
-		case 42:
-			strcat (hexchat_lang, "ru");
-			break;
-		case 43:
-			strcat (hexchat_lang, "sr");
-			break;
-		case 44:
-			strcat (hexchat_lang, "sk");
-			break;
-		case 45:
-			strcat (hexchat_lang, "sl");
-			break;
-		case 46:
-			strcat (hexchat_lang, "es");
-			break;
-		case 47:
-			strcat (hexchat_lang, "sv");
-			break;
-		case 48:
-			strcat (hexchat_lang, "th");
-			break;
-		case 49:
-			strcat (hexchat_lang, "uk");
-			break;
-		case 50:
-			strcat (hexchat_lang, "vi");
-			break;
-		case 51:
-			strcat (hexchat_lang, "wa");
-			break;
-		default:
-			strcat (hexchat_lang, "en");
-			break;
-	}
-
-	putenv (hexchat_lang);
-
-#if 0
-	if (prefs.hex_gui_single && !portable_mode ())
-	{
-		DWORD error;
-
-		mutex = CreateMutex (NULL, TRUE, "Local\\hexchat");
-		error = GetLastError ();
-
-		if (error == ERROR_ALREADY_EXISTS || mutex == NULL)
-		{
-			/* Restoring the HexChat window from the tray via the taskbar icon.
-			 * Only works correctly when HexTray is used.
-			 */
-			if (hextray_mode ())
-			{
-				/* FindWindow() doesn't support wildcards so we check all the open windows */
-				EnumWindows (enum_windows_impl, (LPARAM) NULL);
-				return 0;
-			}
-			else
-			{
-				return 1;
-			}
-		}
-	}
-#endif
-#endif
+	set_locale ();
 
 #ifdef SOCKS
 	SOCKSinit (argv[0]);
@@ -1303,6 +1119,27 @@ main (int argc, char *argv[])
 #endif
 
 	fe_init ();
+
+	/* This is done here because cfgfiles.c is too early in
+	* the startup process to use gtk functions. */
+	if (g_access (get_xdir (), W_OK) != 0)
+	{
+		char buf[2048];
+
+		g_snprintf (buf, sizeof(buf),
+			_("You do not have write access to %s. Nothing from this session can be saved."),
+			get_xdir ());
+		fe_message (buf, FE_MSG_ERROR);
+	}
+
+#ifndef WIN32
+#ifndef __EMX__
+	/* OS/2 uses UID 0 all the time */
+	if (getuid () == 0)
+		fe_message (_("* Running IRC as root is stupid! You should\n"
+			      "  create a User Account and use that to login.\n"), FE_MSG_WARN|FE_MSG_WAIT);
+#endif
+#endif /* !WIN32 */
 
 	xchat_init ();
 
@@ -1323,14 +1160,6 @@ main (int argc, char *argv[])
 
 #ifdef WIN32
 	WSACleanup ();
-
-#if 0
-	if (prefs.hex_gui_single && !portable_mode ())
-	{
-		ReleaseMutex (mutex);
-		CloseHandle (mutex);
-	}
-#endif
 #endif
 
 	return 0;

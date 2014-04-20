@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -32,7 +33,6 @@
 #include <sys/timeb.h>
 #include <process.h>
 #include <io.h>
-#include <pango/pangocairo.h>		/* for find_font() */
 #include "../dirent/dirent-win32.h"
 #include "../../config-win32.h"
 #else
@@ -48,7 +48,6 @@
 #include <errno.h>
 #include "hexchat.h"
 #include "hexchatc.h"
-#include <glib.h>
 #include <ctype.h>
 #include "util.h"
 
@@ -57,6 +56,17 @@
 #endif
 #ifdef SOCKS
 #include <socks.h>
+#endif
+
+/* SASL mechanisms */
+#ifdef USE_OPENSSL
+#include <openssl/bn.h>
+#include <openssl/rand.h>
+#include <openssl/blowfish.h>
+#include <openssl/aes.h>
+#ifndef WIN32
+#include <netinet/in.h>
+#endif
 #endif
 
 #ifndef HAVE_SNPRINTF
@@ -1243,7 +1253,7 @@ country (char *hostname)
 	domain_t *dom;
 
 	if (!hostname || !*hostname || isdigit ((unsigned char) hostname[strlen (hostname) - 1]))
-		return _("Unknown");
+		return NULL;
 	if ((p = strrchr (hostname, '.')))
 		p++;
 	else
@@ -1253,7 +1263,7 @@ country (char *hostname)
 						sizeof (domain_t), country_compare);
 
 	if (!dom)
-		return _("Unknown");
+		return NULL;
 
 	return _(dom->country);
 }
@@ -1394,7 +1404,10 @@ util_exec (const char *cmd)
 #ifndef WIN32
 	pid = fork ();
 	if (pid == -1)
+	{
+		free (argv);
 		return -1;
+	}
 	if (pid == 0)
 	{
 		/* Now close all open file descriptors except stdin, stdout and stderr */
@@ -1448,7 +1461,7 @@ make_ping_time (void)
 	GTimeVal timev;
 	g_get_current_time (&timev);
 #endif
-	return (timev.tv_sec - 50000) * 1000000 + timev.tv_usec;
+	return (timev.tv_sec - 50000) * 1000 + timev.tv_usec/1000;
 }
 
 
@@ -1692,8 +1705,8 @@ move_file (char *src_dir, char *dst_dir, char *fname, int dccpermissions)
 		 0 == dst_dir[0])
 		return;			/* Already in "completed dir" */
 
-	src = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "%s", src_dir, fname);
-	dst = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "%s", dst_dir, fname);
+	src = g_build_filename (src_dir, fname, NULL);
+	dst = g_build_filename (dst_dir, fname, NULL);
 
 	/* already exists in completed dir? Append a number */
 	if (file_exists (dst))
@@ -1861,23 +1874,6 @@ portable_mode ()
 }
 
 int
-hextray_mode ()
-{
-#ifdef WIN32
-	if ((_access( "plugins/hchextray.dll", 0 )) != -1)
-	{
-		return 1;
-	}
-	else
-	{
-		return 0;
-	}
-#else
-	return 0;
-#endif
-}
-
-int
 unity_mode ()
 {
 #ifdef G_OS_UNIX
@@ -1888,111 +1884,397 @@ unity_mode ()
 	return 0;
 }
 
-/* Routine for listing subfolders of a given folder. ALWAYS free correctly after use, e.g.
-void display_list (GSList *list)
-{
-	GSList *iterator = NULL;
-	for (iterator = list; iterator; iterator = iterator->next)
-	{
-		printf ("%s\t", (char *) iterator->data);
-	}
-}
-
-int main (int argc, char *argv[])
-{
-	GSList *list;
-	list = get_subdirs ("foo");
-	display_list (list);
-#if GLIB_CHECK_VERSION(2,28,0)
-	g_slist_free_full (list, (GFunc) g_free);
-#else
-	g_slist_foreach (list, (GFunc) g_free, NULL);
-	g_slist_free (list);
-#endif
-	return 0;
-}
-*/
-GSList *
-get_subdirs (const char *path)
-{
-	DIR *dir;
-	struct dirent *entry;
-	GSList *dirlist = NULL;
-
-	if (!path)
-	{
-		path = ".";
-	}
-
-	dir = opendir (path);
-
-	if (!dir)
-	{
-		return NULL;
-	}
-
-	entry = readdir (dir);
-
-	while (entry != NULL)
-	{
-		if (entry->d_type == DT_DIR && strcmp (entry->d_name, ".") != 0 && strcmp (entry->d_name, "..") != 0)
-		{
-			dirlist = g_slist_append (dirlist, g_strdup (entry->d_name));
-		}
-
-		entry = readdir (dir);
-	}
-
-	return dirlist;
-}
-
 char *
-encode_sasl_pass (char *user, char *pass)
+encode_sasl_pass_plain (char *user, char *pass)
 {
-	int passlen;
+	int authlen;
 	char *buffer;
 	char *encoded;
 
-	/* passphrase generation, nicely copy-pasted from the CAP-SASL plugin */
-	passlen = strlen (user) * 2 + 2 + strlen (pass);
-	buffer = (char*) malloc (passlen + 1);
-	strcpy (buffer, user);
-	strcpy (buffer + strlen (user) + 1, user);
-	strcpy (buffer + strlen (user) * 2 + 2, pass);
-	encoded = g_base64_encode ((unsigned char*) buffer, passlen);
-
-	free (buffer);
+	/* we can't call strlen() directly on buffer thanks to the atrocious \0 characters it requires */
+	authlen = strlen (user) * 2 + 2 + strlen (pass);
+	buffer = g_strdup_printf ("%s%c%s%c%s", user, '\0', user, '\0', pass);
+	encoded = g_base64_encode ((unsigned char*) buffer, authlen);
+	g_free (buffer);
 
 	return encoded;
 }
 
-#ifdef WIN32
-int
-find_font (const char *fontname)
+#ifdef USE_OPENSSL
+/* Adapted from ZNC's SASL module */
+
+static int
+parse_dh (char *str, DH **dh_out, unsigned char **secret_out, int *keysize_out)
+{
+	DH *dh;
+	guchar *data, *decoded_data;
+	guchar *secret;
+	gsize data_len;
+	guint size;
+	guint16 size16;
+	BIGNUM *pubkey;
+	gint key_size;
+
+	dh = DH_new();
+	data = decoded_data = g_base64_decode (str, &data_len);
+	if (data_len < 2)
+		goto fail;
+
+	/* prime number */
+	memcpy (&size16, data, sizeof(size16));
+	size = ntohs (size16);
+	data += 2;
+	data_len -= 2;
+
+	if (size > data_len)
+		goto fail;
+
+	dh->p = BN_bin2bn (data, size, NULL);
+	data += size;
+
+	/* Generator */
+	if (data_len < 2)
+		goto fail;
+
+	memcpy (&size16, data, sizeof(size16));
+	size = ntohs (size16);
+	data += 2;
+	data_len -= 2;
+	
+	if (size > data_len)
+		goto fail;
+
+	dh->g = BN_bin2bn (data, size, NULL);
+	data += size;
+
+	/* pub key */
+	if (data_len < 2)
+		goto fail;
+
+	memcpy (&size16, data, sizeof(size16));
+	size = ntohs(size16);
+	data += 2;
+	data_len -= 2;
+
+	pubkey = BN_bin2bn (data, size, NULL);
+	if (!(DH_generate_key (dh)))
+		goto fail;
+
+	secret = (unsigned char*)malloc (DH_size(dh));
+	key_size = DH_compute_key (secret, pubkey, dh);
+	if (key_size == -1)
+		goto fail;
+
+	g_free (decoded_data);
+
+	*dh_out = dh;
+	*secret_out = secret;
+	*keysize_out = key_size;
+	return 1;
+
+fail:
+	if (decoded_data)
+		g_free (decoded_data);
+	return 0;
+}
+
+char *
+encode_sasl_pass_blowfish (char *user, char *pass, char *data)
+{
+	DH *dh;
+	char *response, *ret;
+	unsigned char *secret;
+	unsigned char *encrypted_pass;
+	char *plain_pass;
+	BF_KEY key;
+	int key_size, length;
+	int pass_len = strlen (pass) + (8 - (strlen (pass) % 8));
+	int user_len = strlen (user);
+	guint16 size16;
+	char *in_ptr, *out_ptr;
+
+	if (!parse_dh (data, &dh, &secret, &key_size))
+		return NULL;
+	BF_set_key (&key, key_size, secret);
+
+	encrypted_pass = (guchar*)malloc (pass_len);
+	memset (encrypted_pass, 0, pass_len);
+	plain_pass = (char*)malloc (pass_len);
+	memset (plain_pass, 0, pass_len);
+	memcpy (plain_pass, pass, pass_len);
+	out_ptr = (char*)encrypted_pass;
+	in_ptr = (char*)plain_pass;
+
+	for (length = pass_len; length; length -= 8, in_ptr += 8, out_ptr += 8)
+		BF_ecb_encrypt ((unsigned char*)in_ptr, (unsigned char*)out_ptr, &key, BF_ENCRYPT);
+
+	/* Create response */
+	length = 2 + BN_num_bytes (dh->pub_key) + pass_len + user_len + 1;
+	response = (char*)malloc (length);
+	out_ptr = response;
+
+	/* our key */
+	size16 = htons ((guint16)BN_num_bytes (dh->pub_key));
+	memcpy (out_ptr, &size16, sizeof(size16));
+	out_ptr += 2;
+	BN_bn2bin (dh->pub_key, (guchar*)out_ptr);
+	out_ptr += BN_num_bytes (dh->pub_key);
+
+	/* username */
+	memcpy (out_ptr, user, user_len + 1);
+	out_ptr += user_len + 1;
+
+	/* pass */
+	memcpy (out_ptr, encrypted_pass, pass_len);
+	
+	ret = g_base64_encode ((const guchar*)response, length);
+
+	DH_free (dh);
+	free (plain_pass);
+	free (encrypted_pass);
+	free (secret);
+	free (response);
+
+	return ret;
+}
+
+char *
+encode_sasl_pass_aes (char *user, char *pass, char *data)
+{
+	DH *dh;
+	AES_KEY key;
+	char *response = NULL;
+	char *out_ptr, *ret = NULL;
+	unsigned char *secret, *ptr;
+	unsigned char *encrypted_userpass, *plain_userpass;
+	int key_size, length;
+	guint16 size16;
+	unsigned char iv[16], iv_copy[16];
+	int user_len = strlen (user) + 1;
+	int pass_len = strlen (pass) + 1;
+	int len = user_len + pass_len;
+	int padlen = 16 - (len % 16);
+	int userpass_len = len + padlen;
+
+	if (!parse_dh (data, &dh, &secret, &key_size))
+		return NULL;
+
+	encrypted_userpass = (guchar*)malloc (userpass_len);
+	memset (encrypted_userpass, 0, userpass_len);
+	plain_userpass = (guchar*)malloc (userpass_len);
+	memset (plain_userpass, 0, userpass_len);
+
+	/* create message */
+	/* format of: <username>\0<password>\0<padding> */
+	ptr = plain_userpass;
+	memcpy (ptr, user, user_len);
+	ptr += user_len;
+	memcpy (ptr, pass, pass_len);
+	ptr += pass_len;
+	if (padlen)
+	{
+		/* Padding */
+		unsigned char randbytes[16];
+		if (!RAND_bytes (randbytes, padlen))
+			goto end;
+
+		memcpy (ptr, randbytes, padlen);
+	}
+
+	if (!RAND_bytes (iv, sizeof (iv)))
+		goto end;
+
+	memcpy (iv_copy, iv, sizeof(iv));
+
+	/* Encrypt */
+	AES_set_encrypt_key (secret, key_size * 8, &key);
+	AES_cbc_encrypt(plain_userpass, encrypted_userpass, userpass_len, &key, iv_copy, AES_ENCRYPT);
+
+	/* Create response */
+	/* format of:  <size pubkey><pubkey><iv (always 16 bytes)><ciphertext> */
+	length = 2 + key_size + sizeof(iv) + userpass_len;
+	response = (char*)malloc (length);
+	out_ptr = response;
+
+	/* our key */
+	size16 = htons ((guint16)key_size);
+	memcpy (out_ptr, &size16, sizeof(size16));
+	out_ptr += 2;
+	BN_bn2bin (dh->pub_key, (guchar*)out_ptr);
+	out_ptr += key_size;
+
+	/* iv */
+	memcpy (out_ptr, iv, sizeof(iv));
+	out_ptr += sizeof(iv);
+
+	/* userpass */
+	memcpy (out_ptr, encrypted_userpass, userpass_len);
+	
+	ret = g_base64_encode ((const guchar*)response, length);
+
+end:
+	DH_free (dh);
+	free (plain_userpass);
+	free (encrypted_userpass);
+	free (secret);
+	if (response)
+		free (response);
+
+	return ret;
+}
+#endif
+
+#ifdef USE_OPENSSL
+static char *
+str_sha256hash (char *string)
 {
 	int i;
-	int n_families;
-	const char *family_name;
-	PangoFontMap *fontmap;
-	PangoFontFamily *family;
-	PangoFontFamily **families;
+	unsigned char hash[SHA256_DIGEST_LENGTH];
+	char buf[SHA256_DIGEST_LENGTH * 2 + 1];		/* 64 digit hash + '\0' */
+	SHA256_CTX sha256;
 
-	fontmap = pango_cairo_font_map_get_default ();
-	pango_font_map_list_families (fontmap, &families, &n_families);
+	SHA256_Init (&sha256);
+	SHA256_Update (&sha256, string, strlen (string));
+	SHA256_Final (hash, &sha256);
 
-	for (i = 0; i < n_families; i++)
+	for (i = 0; i < SHA256_DIGEST_LENGTH; i++)
 	{
-		family = families[i];
-		family_name = pango_font_family_get_name (family);
+		sprintf (buf + (i * 2), "%02x", hash[i]);
+	}
 
-		if (!g_ascii_strcasecmp (family_name, fontname))
+	buf[SHA256_DIGEST_LENGTH * 2] = 0;
+
+	return g_strdup (buf);
+}
+
+/**
+ * \brief Generate CHALLENGEAUTH response for QuakeNet login.
+ *
+ * \param username QuakeNet user name
+ * \param password password for the user
+ * \param challenge the CHALLENGE response we got from Q
+ *
+ * After a successful connection to QuakeNet a CHALLENGE is requested from Q.
+ * Generate the CHALLENGEAUTH response from this CHALLENGE and our user
+ * credentials as per the
+ * <a href="http://www.quakenet.org/development/challengeauth">CHALLENGEAUTH</a>
+ * docs. As for using OpenSSL HMAC, see
+ * <a href="http://www.askyb.com/cpp/openssl-hmac-hasing-example-in-cpp/">example 1</a>,
+ * <a href="http://stackoverflow.com/questions/242665/understanding-engine-initialization-in-openssl">example 2</a>.
+ */
+char *
+challengeauth_response (char *username, char *password, char *challenge)
+{
+	int i;
+	char *user;
+	char *pass;
+	char *passhash;
+	char *key;
+	char *keyhash;
+	unsigned char *digest;
+	GString *buf = g_string_new_len (NULL, SHA256_DIGEST_LENGTH * 2);
+
+	user = g_strdup (username);
+	*user = rfc_tolower (*username);			/* convert username to lowercase as per the RFC */
+
+	pass = g_strndup (password, 10);			/* truncate to 10 characters */
+	passhash = str_sha256hash (pass);
+	g_free (pass);
+
+	key = g_strdup_printf ("%s:%s", user, passhash);
+	g_free (user);
+	g_free (passhash);
+
+	keyhash = str_sha256hash (key);
+	g_free (key);
+
+	digest = HMAC (EVP_sha256 (), keyhash, strlen (keyhash), (unsigned char *) challenge, strlen (challenge), NULL, NULL);
+	g_free (keyhash);
+
+	for (i = 0; i < SHA256_DIGEST_LENGTH; i++)
+	{
+		g_string_append_printf (buf, "%02x", (unsigned int) digest[i]);
+	}
+
+	digest = (unsigned char *) g_string_free (buf, FALSE);
+
+	return (char *) digest;
+}
+#endif
+
+/**
+* \brief Wrapper around strftime for Windows
+*
+* Prevents crashing when using an invalid format by escaping them.
+*
+* Behaves the same as strftime with the addition that
+* it returns 0 if the escaped format string is too large.
+*
+* Based upon work from znc-msvc project.
+*/
+size_t
+strftime_validated (char *dest, size_t destsize, const char *format, const struct tm *time)
+{
+#ifndef WIN32
+	return strftime (dest, destsize, format, time);
+#else
+	char safe_format[64];
+	const char *p = format;
+	int i = 0;
+
+	if (strlen (format) >= sizeof(safe_format))
+		return 0;
+
+	memset (safe_format, 0, sizeof(safe_format));
+
+	while (*p)
+	{
+		if (*p == '%')
 		{
-			g_free (families);
-			return 1;
+			int has_hash = (*(p + 1) == '#');
+			char c = *(p + (has_hash ? 2 : 1));
+
+			if (i >= sizeof (safe_format))
+				return 0;
+
+			switch (c)
+			{
+			case 'a': case 'A': case 'b': case 'B': case 'c': case 'd': case 'H': case 'I': case 'j': case 'm': case 'M':
+			case 'p': case 'S': case 'U': case 'w': case 'W': case 'x': case 'X': case 'y': case 'Y': case 'z': case 'Z':
+			case '%':
+				/* formatting code is fine */
+				break;
+			default:
+				/* replace bad formatting code with itself, escaped, e.g. "%V" --> "%%V" */
+				g_strlcat (safe_format, "%%", sizeof(safe_format));
+				i += 2;
+				p++;
+				break;
+			}
+
+			/* the current loop run will append % (and maybe #) and the next one will do the actual char. */
+			if (has_hash)
+			{
+				safe_format[i] = *p;
+				p++;
+				i++;
+			}
+			if (c == '%')
+			{
+				safe_format[i] = *p;
+				p++;
+				i++;
+			}
+		}
+
+		if (*p)
+		{
+			safe_format[i] = *p;
+			p++;
+			i++;
 		}
 	}
 
-	g_free (families);
-	return 0;
-}
+	return strftime (dest, destsize, safe_format, time);
 #endif
+}

@@ -7,7 +7,7 @@ pevt_generic_nick_help
 Ban List
 XP_TE_BANLIST
 pevt_banlist_help
-%C22*%O$t%C22$1%O Banlist: %C18$2%O on %C24$4%O by %C26$3%O
+%C22*%O$t%C22$1%O: %C18$2%O on %C24$4%O by %C26$3%O
 4
 
 Banned
@@ -103,7 +103,7 @@ pevt_chanhop_help
 Channel INVITE
 XP_TE_CHANINVITE
 pevt_chaninvite_help
-%C22*%O$t%C26$1%C sets invite on %C18$2%O
+%C22*%O$t%C26$1%C sets invite exempt on %C18$2%O
 2
 
 Channel List
@@ -115,7 +115,7 @@ pevt_generic_none_help
 Channel Message
 XP_TE_CHANMSG
 pevt_chanmsg_help
-%C18%H<%H$4$1%H>%H%O$t$2
+%C18%H<%H$4$1%C18%H>%H%O$t$2
 n4
 
 Channel Mode Generic
@@ -148,6 +148,12 @@ pevt_chanop_help
 %C22*%O$t%C26$1%O gives channel operator status to %C18$2%O
 2
 
+Channel Quiet
+XP_TE_CHANQUIET
+pevt_chanquiet_help
+%C22*%O$t%C26$1%O sets quiet on %C18$2%O
+2
+
 Channel Remove Exempt
 XP_TE_CHANRMEXEMPT
 pevt_chanrmexempt_help
@@ -157,7 +163,7 @@ pevt_chanrmexempt_help
 Channel Remove Invite
 XP_TE_CHANRMINVITE
 pevt_chanrminvite_help
-%C22*%O$t%C26$1%O removes invite on %C18$2%O
+%C22*%O$t%C26$1%O removes invite exempt on %C18$2%O
 2
 
 Channel Remove Keyword
@@ -175,7 +181,7 @@ pevt_chanrmlimit_help
 Channel Set Key
 XP_TE_CHANSETKEY
 pevt_chansetkey_help
-%C22*%O$t$1 sets channel keyword to %C24$2%O
+%C22*%O$t%C26$1%O sets channel keyword to %C24$2%O
 2
 
 Channel Set Limit
@@ -188,6 +194,18 @@ Channel UnBan
 XP_TE_CHANUNBAN
 pevt_chanunban_help
 %C22*%O$t%C26$1%O removes ban on %C18$2%O
+2
+
+Channel UnQuiet
+XP_TE_CHANUNQUIET
+pevt_chanunquiet_help
+%C22*%O$t%C26$1%O removes quiet on %C18$2%O
+2
+
+Channel Url
+XP_TE_CHANURL
+pevt_chanurl_help
+%C22*%O$tChannel %C22$1%O url: %C24$2
 2
 
 Channel Voice
@@ -475,8 +493,8 @@ pevt_invited_help
 Join
 XP_TE_JOIN
 pevt_join_help
-%C23*$t$1 ($3) has joined
-3
+%C23*$t$1 ($3%C23) has joined
+4
 
 Keyword
 XP_TE_KEYWORD
@@ -517,13 +535,19 @@ pevt_generic_none_help
 Nick Clash
 XP_TE_NICKCLASH
 pevt_nickclash_help
-%C23*%O$t%C28$1%C already in use. Retrying with %C18$2%O...
+%C23*%O$t%C28$1%C is already in use. Retrying with %C18$2%O...
+2
+
+Nick Erroneous
+XP_TE_NICKERROR
+pevt_nickclash_help
+%C23*%O$t%C28$1%C is erroneous. Retrying with %C18$2%O...
 2
 
 Nick Failed
 XP_TE_NICKFAIL
 pevt_generic_none_help
-%C20*%O$tNickname already in use. Use /NICK to try another.
+%C20*%O$tNickname is erroneous or already in use. Use /NICK to try another.
 0
 
 No DCC
@@ -549,6 +573,18 @@ XP_TE_NOTICESEND
 pevt_ctcpsend_help
 %O->%C18$1%O<-$t$2
 n2
+
+Notify Away
+XP_TE_NOTIFYAWAY
+pevt_notifyaway_help
+%C23*%O$tNotify: %C18$1%C is away (%C24$2%O)
+2
+
+Notify Back
+XP_TE_NOTIFYBACK
+pevt_generic_nick_help
+%C23*%O$tNotify: %C18$1%C is back
+1
 
 Notify Empty
 XP_TE_NOTIFYEMPTY
@@ -589,13 +625,13 @@ n0
 Part
 XP_TE_PART
 pevt_part_help
-%C24*$t$1 ($2) has left
+%C24*$t$1 ($2%C24) has left
 3
 
 Part with Reason
 XP_TE_PARTREASON
 pevt_partreason_help
-%C24*$t$1 ($2) has left ($4)
+%C24*$t$1 ($2%C24) has left ($4)
 4
 
 Ping Reply
@@ -667,8 +703,8 @@ pevt_resolvinguser_help
 SASL Authenticating
 XP_TE_SASLAUTH
 pevt_saslauth_help
-%C23*%O$tAuthenticating via SASL as %C18$1%O
-1
+%C23*%O$tAuthenticating via SASL as %C18$1%O (%C24$2%O)
+2
 
 SASL Response
 XP_TE_SASLRESPONSE

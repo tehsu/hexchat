@@ -489,6 +489,7 @@ server_connected (server * serv)
 {
 	prefs.wait_on_exit = TRUE;
 	serv->ping_recv = time (0);
+	serv->lag_sent = 0;
 	serv->connected = TRUE;
 	set_nonblocking (serv->sok);
 	serv->iotag = fe_input_add (serv->sok, FIA_READ|FIA_EX, server_read, serv);
@@ -1048,7 +1049,8 @@ server_cleanup (server * serv)
 #ifdef USE_OPENSSL
 	if (serv->ssl)
 	{
-		_SSL_close (serv->ssl);
+		SSL_shutdown (serv->ssl);
+		SSL_free (serv->ssl);
 		serv->ssl = NULL;
 	}
 #endif
@@ -1704,18 +1706,25 @@ server_connect (server *serv, char *hostname, int port, int no_login)
 	if (serv->use_ssl)
 	{
 		char *cert_file;
+		serv->have_cert = FALSE;
 
 		/* first try network specific cert/key */
 		cert_file = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "certs" G_DIR_SEPARATOR_S "%s.pem",
 					 get_xdir (), server_get_network (serv, TRUE));
 		if (SSL_CTX_use_certificate_file (ctx, cert_file, SSL_FILETYPE_PEM) == 1)
-			SSL_CTX_use_PrivateKey_file (ctx, cert_file, SSL_FILETYPE_PEM);
+		{
+			if (SSL_CTX_use_PrivateKey_file (ctx, cert_file, SSL_FILETYPE_PEM) == 1)
+				serv->have_cert = TRUE;
+		}
 		else
 		{
 			/* if that doesn't exist, try <config>/certs/client.pem */
-			cert_file = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "certs" G_DIR_SEPARATOR_S "client.pem", get_xdir ());
+			cert_file = g_build_filename (get_xdir (), "certs", "client.pem", NULL);
 			if (SSL_CTX_use_certificate_file (ctx, cert_file, SSL_FILETYPE_PEM) == 1)
-				SSL_CTX_use_PrivateKey_file (ctx, cert_file, SSL_FILETYPE_PEM);
+			{
+				if (SSL_CTX_use_PrivateKey_file (ctx, cert_file, SSL_FILETYPE_PEM) == 1)
+					serv->have_cert = TRUE;
+			}
 		}
 		g_free (cert_file);
 	}
@@ -1762,7 +1771,11 @@ server_connect (server *serv, char *hostname, int port, int no_login)
 										serv, 0, (DWORD *)&pid));
 #else
 #ifdef LOOKUPD
-	rand();	/* CL: net_resolve calls rand() when LOOKUPD is set, so prepare a different seed for each child. This method giver a bigger variation in seed values than calling srand(time(0)) in the child itself. */
+	/* CL: net_resolve calls rand() when LOOKUPD is set, so prepare a different
+	 * seed for each child. This method gives a bigger variation in seed values
+	 * than calling srand(time(0)) in the child itself.
+	 */
+	rand();
 #endif
 	switch (pid = fork ())
 	{
@@ -1877,16 +1890,20 @@ server_set_defaults (server *serv)
 	serv->nick_modes = strdup ("ohv");
 
 	serv->nickcount = 1;
-	serv->nickservtype = 1;
 	serv->end_of_motd = FALSE;
 	serv->is_away = FALSE;
 	serv->supports_watch = FALSE;
+	serv->supports_monitor = FALSE;
 	serv->bad_prefix = FALSE;
 	serv->use_who = TRUE;
 	serv->have_namesx = FALSE;
+	serv->have_awaynotify = FALSE;
 	serv->have_uhnames = FALSE;
 	serv->have_whox = FALSE;
 	serv->have_idmsg = FALSE;
+	serv->have_accnotify = FALSE;
+	serv->have_extjoin = FALSE;
+	serv->have_server_time = FALSE;
 	serv->have_sasl = FALSE;
 	serv->have_except = FALSE;
 	serv->have_invite = FALSE;
@@ -1895,8 +1912,13 @@ server_set_defaults (server *serv)
 char *
 server_get_network (server *serv, gboolean fallback)
 {
+	/* check the network list */
 	if (serv->network)
 		return ((ircnet *)serv->network)->name;
+
+	/* check the network name given in 005 NETWORK=... */
+	if (serv->server_session && *serv->server_session->channel)
+		return serv->server_session->channel;
 
 	if (fallback)
 		return serv->servername;
@@ -2023,8 +2045,8 @@ server_free (server *serv)
 		free (serv->last_away_reason);
 	if (serv->encoding)
 		free (serv->encoding);
-	if (serv->autojoin)
-		free (serv->autojoin);
+	if (serv->favlist)
+		g_slist_free_full (serv->favlist, (GDestroyNotify) servlist_favchan_free);
 
 	fe_server_callback (serv);
 

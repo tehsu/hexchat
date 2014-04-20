@@ -22,17 +22,9 @@
 
 #include "fe-gtk.h"
 
-#include <gtk/gtkmain.h>
-#include <gtk/gtkentry.h>
-#include <gtk/gtkprogressbar.h>
-#include <gtk/gtkbox.h>
-#include <gtk/gtklabel.h>
-#include <gtk/gtktogglebutton.h>
-#include <gtk/gtkmessagedialog.h>
-#include <gtk/gtkversion.h>
-
 #ifdef WIN32
 #include <gdk/gdkwin32.h>
+#include <windows.h>
 #else
 #include <unistd.h>
 #endif
@@ -49,6 +41,7 @@
 #include "gtkutil.h"
 #include "maingui.h"
 #include "pixmaps.h"
+#include "chanlist.h"
 #include "joind.h"
 #include "xtext.h"
 #include "palette.h"
@@ -60,63 +53,18 @@
 #include "urlgrab.h"
 #include "setup.h"
 
-#ifdef USE_XLIB
-#include <gdk/gdkx.h>
-#include <gtk/gtkinvisible.h>
-#endif
-
-#ifdef USE_GTKSPELL
-#include <gtk/gtktextview.h>
-#endif
-
-#ifdef WIN32
-#include <windows.h>
+#ifdef USE_LIBCANBERRA
+#include <canberra.h>
 #endif
 
 GdkPixmap *channelwin_pix;
 
+#ifdef USE_LIBCANBERRA
+static ca_context *ca_con;
+#endif
 
-#ifdef USE_XLIB
-
-static void
-redraw_trans_xtexts (void)
-{
-	GSList *list = sess_list;
-	session *sess;
-	int done_main = FALSE;
-
-	while (list)
-	{
-		sess = list->data;
-		if (GTK_XTEXT (sess->gui->xtext)->transparent)
-		{
-			if (!sess->gui->is_tab || !done_main)
-				gtk_xtext_refresh (GTK_XTEXT (sess->gui->xtext), 1);
-			if (sess->gui->is_tab)
-				done_main = TRUE;
-		}
-		list = list->next;
-	}
-}
-
-static GdkFilterReturn
-root_event_cb (GdkXEvent *xev, GdkEventProperty *event, gpointer data)
-{
-	static Atom at = None;
-	XEvent *xevent = (XEvent *)xev;
-
-	if (xevent->type == PropertyNotify)
-	{
-		if (at == None)
-			at = XInternAtom (xevent->xproperty.display, "_XROOTPMAP_ID", True);
-
-		if (at == xevent->xproperty.atom)
-			redraw_trans_xtexts ();
-	}
-
-	return GDK_FILTER_CONTINUE;
-}
-
+#ifdef HAVE_GTK_MAC
+GtkosxApplication *osx_app;
 #endif
 
 /* === command-line parameter parsing : requires glib 2.6 === */
@@ -134,22 +82,24 @@ static const GOptionEntry gopt_entries[] =
  {"no-plugins",	'n', 0, G_OPTION_ARG_NONE,	&arg_skip_plugins, N_("Don't auto load any plugins"), NULL},
  {"plugindir",	'p', 0, G_OPTION_ARG_NONE,	&arg_show_autoload, N_("Show plugin/script auto-load directory"), NULL},
  {"configdir",	'u', 0, G_OPTION_ARG_NONE,	&arg_show_config, N_("Show user config directory"), NULL},
- {"url",	 0,  0, G_OPTION_ARG_STRING,	&arg_url, N_("Open an irc://server:port/channel URL"), "URL"},
-#ifndef WIN32	/* uses DBUS */
+ {"url",	 0,  G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_STRING, &arg_url, N_("Open an irc://server:port/channel?key URL"), "URL"},
  {"command",	'c', 0, G_OPTION_ARG_STRING,	&arg_command, N_("Execute command:"), "COMMAND"},
+#ifdef USE_DBUS
  {"existing",	'e', 0, G_OPTION_ARG_NONE,	&arg_existing, N_("Open URL or execute command in an existing HexChat"), NULL},
 #endif
  {"minimize",	 0,  0, G_OPTION_ARG_INT,	&arg_minimize, N_("Begin minimized. Level 0=Normal 1=Iconified 2=Tray"), N_("level")},
  {"version",	'v', 0, G_OPTION_ARG_NONE,	&arg_show_version, N_("Show version information"), NULL},
+ {G_OPTION_REMAINING, '\0', 0, G_OPTION_ARG_STRING_ARRAY, &arg_urls, N_("Open an irc://server:port/channel?key URL"), "URL"},
  {NULL}
 };
 
+#ifdef WIN32
 static void
 create_msg_dialog (gchar *title, gchar *message)
 {
 	GtkWidget *dialog;
 
-	dialog = gtk_message_dialog_new (NULL, GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_CLOSE, message);
+	dialog = gtk_message_dialog_new (NULL, GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_CLOSE, "%s", message);
 	gtk_window_set_title (GTK_WINDOW (dialog), title);
 
 /* On Win32 we automatically have the icon. If we try to load it explicitly, it will look ugly for some reason. */
@@ -161,6 +111,7 @@ create_msg_dialog (gchar *title, gchar *message)
 	gtk_dialog_run (GTK_DIALOG (dialog));
 	gtk_widget_destroy (dialog);
 }
+#endif
 
 int
 fe_args (int argc, char *argv[])
@@ -227,9 +178,13 @@ fe_args (int argc, char *argv[])
 
 	if (arg_show_version)
 	{
-		buffer = g_strdup_printf (DISPLAY_NAME " " PACKAGE_VERSION "\n");
+		buffer = g_strdup_printf ("%s %s", PACKAGE_NAME, PACKAGE_VERSION);
+#ifdef WIN32
 		gtk_init (&argc, &argv);
 		create_msg_dialog ("Version Information", buffer);
+#else
+		puts (buffer);
+#endif
 		g_free (buffer);
 
 		return 0;
@@ -237,9 +192,13 @@ fe_args (int argc, char *argv[])
 
 	if (arg_show_autoload)
 	{
-		buffer = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "addons\n", get_xdir ());
+		buffer = g_strdup_printf ("%s%caddons%c", get_xdir(), G_DIR_SEPARATOR, G_DIR_SEPARATOR);
+#ifdef WIN32
 		gtk_init (&argc, &argv);
 		create_msg_dialog ("Plugin/Script Auto-load Directory", buffer);
+#else
+		puts (buffer);
+#endif
 		g_free (buffer);
 
 		return 0;
@@ -247,9 +206,13 @@ fe_args (int argc, char *argv[])
 
 	if (arg_show_config)
 	{
-		buffer = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "\n", get_xdir ());
+		buffer = g_strdup_printf ("%s%c", get_xdir(), G_DIR_SEPARATOR);
+#ifdef WIN32
 		gtk_init (&argc, &argv);
 		create_msg_dialog ("User Config Directory", buffer);
+#else
+		puts (buffer);
+#endif
 		g_free (buffer);
 
 		return 0;
@@ -276,9 +239,8 @@ fe_args (int argc, char *argv[])
 
 	gtk_init (&argc, &argv);
 
-#ifdef USE_XLIB
-	gdk_window_set_events (gdk_get_default_root_window (), GDK_PROPERTY_CHANGE_MASK);
-	gdk_window_add_filter (gdk_get_default_root_window (), (GdkFilterFunc)root_event_cb, NULL);
+#ifdef HAVE_GTK_MAC
+	osx_app = g_object_new(GTKOSX_TYPE_APPLICATION, NULL);
 #endif
 
 	return -1;
@@ -287,11 +249,7 @@ fe_args (int argc, char *argv[])
 const char cursor_color_rc[] =
 	"style \"xc-ib-st\""
 	"{"
-#ifdef USE_GTKSPELL
-		"GtkTextView::cursor-color=\"#%02x%02x%02x\""
-#else
 		"GtkEntry::cursor-color=\"#%02x%02x%02x\""
-#endif
 	"}"
 	"widget \"*.hexchat-inputbox\" style : application \"xc-ib-st\"";
 
@@ -335,6 +293,9 @@ fe_init (void)
 	key_init ();
 	pixmaps_init ();
 
+#ifdef HAVE_GTK_MAC
+	gtkosx_application_set_dock_icon_pixbuf (osx_app, pix_hexchat);
+#endif
 	channelwin_pix = pixmap_load_from_file (prefs.hex_text_background);
 	input_style = create_input_style (gtk_style_new ());
 }
@@ -342,6 +303,10 @@ fe_init (void)
 void
 fe_main (void)
 {
+#ifdef HAVE_GTK_MAC
+	gtkosx_application_ready(osx_app);
+#endif
+
 	gtk_main ();
 
 	/* sleep for 2 seconds so any QUIT messages are not lost. The  */
@@ -442,6 +407,8 @@ fe_new_window (session *sess, int focus)
 
 	if (!sess_list->next)
 		g_idle_add (fe_idle, NULL);
+
+	sess->scrollback_replay_marklast = gtk_xtext_set_marker_last;
 }
 
 void
@@ -658,12 +625,13 @@ fe_progressbar_end (server *serv)
 }
 
 void
-fe_print_text (struct session *sess, char *text, time_t stamp)
+fe_print_text (struct session *sess, char *text, time_t stamp,
+			   gboolean no_activity)
 {
 	PrintTextRaw (sess->res->buffer, (unsigned char *)text, prefs.hex_text_indent, stamp);
 
-	if (!sess->new_data && sess != current_tab &&
-		 sess->gui->is_tab && !sess->nick_said && stamp == 0)
+	if (!no_activity && !sess->new_data && sess != current_tab &&
+		sess->gui->is_tab && !sess->nick_said)
 	{
 		sess->new_data = TRUE;
 		lastact_update (sess);
@@ -677,8 +645,29 @@ fe_print_text (struct session *sess, char *text, time_t stamp)
 void
 fe_beep (session *sess)
 {
-	if (fe_gui_info (sess, 0) != 1)
-		gdk_beep ();
+#ifdef WIN32
+	if (!PlaySound ("Notification.IM", NULL, SND_ALIAS|SND_ASYNC))
+	{
+		/* This is really just a fallback attempt, may or may not work on new Windows releases, especially on x64.
+		 * You should set up the "Instant Message Notification" system sound instead, supported on Vista and up.
+		 */
+		Beep (1000, 50);
+	}
+#else
+#ifdef USE_LIBCANBERRA
+	if (ca_con == NULL)
+	{
+		ca_context_create (&ca_con);
+		ca_context_change_props (ca_con,
+										CA_PROP_APPLICATION_ID, "hexchat",
+										CA_PROP_APPLICATION_NAME, DISPLAY_NAME,
+										CA_PROP_APPLICATION_ICON_NAME, "hexchat", NULL);
+	}
+
+	if (ca_context_play (ca_con, 0, CA_PROP_EVENT_ID, "message-new-instant", NULL) != 0)
+#endif
+	gdk_beep ();
+#endif
 }
 
 void
@@ -726,7 +715,7 @@ fe_lastlog (session *sess, session *lastlog_sess, char *sstr, gtk_xtext_search_f
 }
 
 void
-fe_set_lag (server *serv, int lag)
+fe_set_lag (server *serv, long lag)
 {
 	GSList *list = sess_list;
 	session *sess;
@@ -740,17 +729,21 @@ fe_set_lag (server *serv, int lag)
 		if (!serv->lag_sent)
 			return;
 		nowtim = make_ping_time ();
-		lag = (nowtim - serv->lag_sent) / 100000;
+		lag = nowtim - serv->lag_sent;
 	}
 
-	per = (double)((double)lag / (double)10);
+	/* if there is no pong for >30s report the lag as +30s */
+	if (lag > 30000 && serv->lag_sent)
+		lag=30000;
+
+	per = ((double)lag) / 1000.0;
 	if (per > 1.0)
 		per = 1.0;
 
-	snprintf (lagtext, sizeof (lagtext) - 1, "%s%d.%ds",
-				 serv->lag_sent ? "+" : "", lag / 10, lag % 10);
-	snprintf (lagtip, sizeof (lagtip) - 1, "Lag: %s%d.%d seconds",
-				 serv->lag_sent ? "+" : "", lag / 10, lag % 10);
+	snprintf (lagtext, sizeof (lagtext) - 1, "%s%ld.%lds",
+			  serv->lag_sent ? "+" : "", lag / 1000, (lag/100) % 10);
+	snprintf (lagtip, sizeof (lagtip) - 1, "Lag: %s%ld.%ld seconds",
+				 serv->lag_sent ? "+" : "", lag / 1000, (lag/100) % 10);
 
 	while (list)
 	{
@@ -766,7 +759,7 @@ fe_set_lag (server *serv, int lag)
 				if (sess->gui->lagometer)
 				{
 					gtk_progress_bar_set_fraction ((GtkProgressBar *) sess->gui->lagometer, per);
-					add_tip (sess->gui->lagometer->parent, lagtip);
+					gtk_widget_set_tooltip_text (gtk_widget_get_parent (sess->gui->lagometer), lagtip);
 				}
 				if (sess->gui->laginfo)
 					gtk_label_set_text ((GtkLabel *) sess->gui->laginfo, lagtext);
@@ -812,7 +805,7 @@ fe_set_throttle (server *serv)
 				if (sess->gui->throttlemeter)
 				{
 					gtk_progress_bar_set_fraction ((GtkProgressBar *) sess->gui->throttlemeter, per);
-					add_tip (sess->gui->throttlemeter->parent, tip);
+					gtk_widget_set_tooltip_text (gtk_widget_get_parent (sess->gui->throttlemeter), tip);
 				}
 				if (sess->gui->throttleinfo)
 					gtk_label_set_text ((GtkLabel *) sess->gui->throttleinfo, tbuf);
@@ -878,10 +871,15 @@ fe_confirm (const char *message, void (*yesproc)(void *), void (*noproc)(void *)
 {
 	/* warning, assuming fe_confirm is used by DCC only! */
 	struct DCC *dcc = ud;
+	char *filepath;
 
 	if (dcc->file)
-		gtkutil_file_req (message, dcc_saveas_cb, ud, dcc->file, NULL,
-								FRF_WRITE|FRF_NOASKOVERWRITE);
+	{
+		filepath = g_build_filename (prefs.hex_dcc_dir, dcc->file, NULL);
+		gtkutil_file_req (message, dcc_saveas_cb, ud, filepath, NULL,
+								FRF_WRITE|FRF_NOASKOVERWRITE|FRF_FILTERISINITIAL);
+		g_free (filepath);
+	}
 }
 
 int
@@ -890,15 +888,15 @@ fe_gui_info (session *sess, int info_type)
 	switch (info_type)
 	{
 	case 0:	/* window status */
-#if GTK_CHECK_VERSION(2,20,0)
 		if (!gtk_widget_get_visible (GTK_WIDGET (sess->gui->window)))
-#else
-		if (!GTK_WIDGET_VISIBLE (GTK_WIDGET (sess->gui->window)))
-#endif
+		{
 			return 2;	/* hidden (iconified or systray) */
+		}
 
 		if (gtk_window_is_active (GTK_WINDOW (sess->gui->window)))
+		{
 			return 1;	/* active/focused */
+		}
 
 		return 0;		/* normal (no keyboard focus or behind a window) */
 	}
@@ -913,11 +911,7 @@ fe_gui_info_ptr (session *sess, int info_type)
 	{
 	case 0:	/* native window pointer (for plugins) */
 #ifdef WIN32
-#if GTK_CHECK_VERSION(2,24,8)
-		return gdk_win32_window_get_impl_hwnd (sess->gui->window->window);
-#else
-		return GDK_WINDOW_HWND (sess->gui->window->window);
-#endif
+		return gdk_win32_window_get_impl_hwnd (gtk_widget_get_window (sess->gui->window));
 #else
 		return sess->gui->window;
 #endif
@@ -979,79 +973,52 @@ fe_set_inputbox_contents (session *sess, char *text)
 	}
 }
 
-#ifndef WIN32
-
-static gboolean
-try_browser (const char *browser, char *arg, const char *url)
-{
-	char *argv[4];
-	char *path;
-
-	path = g_find_program_in_path (browser);
-	if (!path)
-		return 0;
-
-	argv[0] = path;
-	argv[1] = (char *)url;
-	argv[2] = NULL;
-	if (arg)
-	{
-		argv[1] = arg;
-		argv[2] = (char *)url;
-		argv[3] = NULL;
-	}
-	hexchat_execv (argv);
-	g_free (path);
-	return 1;
-}
-
-#endif
-
 static void
 fe_open_url_inner (const char *url)
 {
 #ifdef WIN32
 	ShellExecute (0, "open", url, NULL, NULL, SW_SHOWNORMAL);
 #elif defined __APPLE__
-	try_browser ("open", NULL, url);				/* on Mac you can just 'open http://foo.bar/' */
+	/* on Mac you can just 'open http://foo.bar/' */
+	gchar open[512];
+	g_snprintf (open, sizeof(open), "%s %s", g_find_program_in_path ("open"), url, NULL);
+	hexchat_exec (open);
 #else
-
-	/* lets try what gtk has built in first. */
-	if (gtk_show_uri (NULL, url, GDK_CURRENT_TIME, NULL))
-		return;
-		
-	/* universal desktop URL opener (from xdg-utils). Supports gnome,kde,xfce4. */
-	if (try_browser ("xdg-open", NULL, url))
-		return;
-
-	/* try to detect GNOME (this env variable is depreciated) */
-	if (g_getenv ("GNOME_DESKTOP_SESSION_ID"))
-	{
-		if (try_browser ("gvfs-open", NULL, url))
-			return;
-	}
-
-	/* try to detect KDE */
-	if (g_getenv ("KDE_FULL_SESSION"))
-	{
-		if (try_browser ("kde-open", NULL, url))
-			return;
-	}
-
-	/* everything failed, what now? just try firefox */
-	if (try_browser ("firefox", NULL, url))
-		return;
-
-	/* fresh out of ideas... i hear chromium is popular */
-	try_browser ("chromium", NULL, url);
+	gtk_show_uri (NULL, url, GDK_CURRENT_TIME, NULL);
 #endif
 }
 
 static void
 fe_open_url_locale (const char *url)
 {
+	int url_type = url_check_word (url);
+	char *uri;
+
+	/* gvfs likes file:// */
+	if (url_type == WORD_PATH)
+	{
+#ifndef WIN32
+		uri = g_strconcat ("file://", url, NULL);
+		fe_open_url_inner (uri);
+		g_free (uri);
+#else
+		fe_open_url_inner (url);
+#endif
+	}
+	/* IPv6 addr. Add http:// */
+	else if (url_type == WORD_HOST6)
+	{
+		/* IPv6 addrs in urls should be enclosed in [ ] */
+		if (*url != '[')
+			uri = g_strdup_printf ("http://[%s]", url);
+		else
+			uri = g_strdup_printf ("http://%s", url);
+
+		fe_open_url_inner (uri);
+		g_free (uri);
+	}
 	/* the http:// part's missing, prepend it, otherwise it won't always work */
-	if (strchr (url, ':') == NULL && url_check_word (url) != WORD_PATH)
+	else if (strchr (url, ':') == NULL)
 	{
 		url = g_strdup_printf ("http://%s", url);
 		fe_open_url_inner (url);
@@ -1141,4 +1108,27 @@ fe_get_file (const char *title, char *initial,
 	/* OK: Call callback once per file, then once more with file=NULL. */
 	/* CANCEL: Call callback once with file=NULL. */
 	gtkutil_file_req (title, callback, userdata, initial, NULL, flags | FRF_FILTERISINITIAL);
+}
+
+void
+fe_open_chan_list (server *serv, char *filter, int do_refresh)
+{
+	chanlist_opengui (serv, do_refresh);
+}
+
+const char *
+fe_get_default_font (void)
+{
+#ifdef WIN32
+	if (gtkutil_find_font ("Consolas"))
+		return "Consolas 10";
+	else
+#else
+#ifdef __APPLE__
+	if (gtkutil_find_font ("Menlo"))
+		return "Menlo 13";
+	else
+#endif
+#endif
+		return NULL;
 }

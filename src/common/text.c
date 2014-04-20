@@ -33,7 +33,6 @@
 #endif
 
 #include "hexchat.h"
-#include <glib.h>
 #include "cfgfiles.h"
 #include "chanopt.h"
 #include "plugin.h"
@@ -48,6 +47,10 @@
 #include <windows.h>
 #endif
 
+#ifdef USE_LIBCANBERRA
+#include <canberra.h>
+#endif
+
 struct pevt_stage1
 {
 	int len;
@@ -55,6 +58,9 @@ struct pevt_stage1
 	struct pevt_stage1 *next;
 };
 
+#ifdef USE_LIBCANBERRA
+static ca_context *ca_con;
+#endif
 
 static void mkdir_p (char *filename);
 static char *log_create_filename (char *channame);
@@ -73,7 +79,10 @@ scrollback_get_filename (session *sess)
 	g_free (buf);
 
 	chan = log_create_filename (sess->channel);
-	buf = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "scrollback" G_DIR_SEPARATOR_S "%s" G_DIR_SEPARATOR_S "%s.txt", get_xdir (), net, chan);
+	if (chan[0])
+		buf = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "scrollback" G_DIR_SEPARATOR_S "%s" G_DIR_SEPARATOR_S "%s.txt", get_xdir (), net, chan);
+	else
+		buf = NULL;
 	free (chan);
 
 	return buf;
@@ -201,7 +210,7 @@ scrollback_save (session *sess, char *text)
 	time_t stamp;
 	int len;
 
-	if (sess->type == SESS_SERVER)
+	if (sess->type == SESS_SERVER && prefs.hex_gui_tab_server == 1)
 		return;
 
 	if (sess->text_scrollback == SET_DEFAULT)
@@ -289,11 +298,24 @@ scrollback_load (session *sess)
 		{
 			char *buf_tmp;
 
+			/* If nothing but funny trailing matter e.g. 0x0d or 0x0d0a, toss it */
+			if (n_bytes >= 1 && buf[0] == 0x0d)
+			{
+				g_free (buf);
+				continue;
+			}
+
 			n_bytes--;
 			buf_tmp = buf;
 			buf = g_strndup (buf_tmp, n_bytes);
 			g_free (buf_tmp);
 
+			/*
+			 * Some scrollback lines have three blanks after the timestamp and a newline
+			 * Some have only one blank and a newline
+			 * Some don't even have a timestamp
+			 * Some don't have any text at all
+			 */
 			if (buf[0] == 'T')
 			{
 				if (sizeof (time_t) == 4)
@@ -301,22 +323,33 @@ scrollback_load (session *sess)
 				else
 					stamp = strtoull (buf + 2, NULL, 10); /* in case time_t is 64 bits */
 				text = strchr (buf + 3, ' ');
-				if (text)
+				if (text && text[1])
 				{
 					if (prefs.hex_text_stripcolor_replay)
 					{
 						text = strip_color (text + 1, -1, STRIP_COLOR);
 					}
 
-					fe_print_text (sess, text, stamp);
+					fe_print_text (sess, text, stamp, TRUE);
 
 					if (prefs.hex_text_stripcolor_replay)
 					{
 						g_free (text);
 					}
 				}
-				lines++;
+				else
+				{
+					fe_print_text (sess, "  ", stamp, TRUE);
+				}
 			}
+			else
+			{
+				if (strlen (buf))
+					fe_print_text (sess, buf, 0, TRUE);
+				else
+					fe_print_text (sess, "  ", 0, TRUE);
+			}
+			lines++;
 
 			g_free (buf);
 		}
@@ -334,7 +367,7 @@ scrollback_load (session *sess)
 		text = ctime (&stamp);
 		text[24] = 0;	/* get rid of the \n */
 		buf = g_strdup_printf ("\n*\t%s %s\n\n", _("Loaded log from"), text);
-		fe_print_text (sess, buf, 0);
+		fe_print_text (sess, buf, 0, TRUE);
 		g_free (buf);
 		/*EMIT_SIGNAL (XP_TE_GENMSG, sess, "*", buf, NULL, NULL, NULL, 0);*/
 	}
@@ -512,7 +545,11 @@ log_create_pathname (char *servname, char *channame, char *netname)
 
 	if (!netname)
 	{
-		netname = "NETWORK";
+		netname = strdup ("NETWORK");
+	}
+	else
+	{
+		netname = log_create_filename (netname);
 	}
 
 	/* first, everything is in UTF-8 */
@@ -527,11 +564,12 @@ log_create_pathname (char *servname, char *channame, char *netname)
 
 	log_insert_vars (fname, sizeof (fname), prefs.hex_irc_logmask, channame, netname, servname);
 	free (channame);
+	free (netname);
 
 	/* insert time/date */
 	now = time (NULL);
 	tm = localtime (&now);
-	strftime (fnametime, sizeof (fnametime), fname, tm);
+	strftime_validated (fnametime, sizeof (fnametime), fname, tm);
 
 	/* create final path/filename */
 	if (logmask_is_fullpath ())
@@ -638,14 +676,7 @@ get_stamp_str (char *fmt, time_t tim, char **ret)
 			fmt = loc;
 	}
 
-	len = strftime (dest, sizeof (dest), fmt, localtime (&tim));
-#ifdef WIN32
-	if (!len)
-	{
-		/* use failsafe format until a correct one is specified */
-		len = strftime (dest, sizeof (dest), "[%H:%M:%S]", localtime (&tim));
-	}
-#endif
+	len = strftime_validated (dest, sizeof (dest), fmt, localtime (&tim));
 	if (len)
 	{
 		if (prefs.utf8_locale)
@@ -860,7 +891,7 @@ text_validate (char **text, int *len)
 }
 
 void
-PrintText (session *sess, char *text)
+PrintTextTimeStamp (session *sess, char *text, time_t timestamp)
 {
 	char *conv;
 
@@ -884,10 +915,16 @@ PrintText (session *sess, char *text)
 
 	log_write (sess, text);
 	scrollback_save (sess, text);
-	fe_print_text (sess, text, 0);
+	fe_print_text (sess, text, timestamp, FALSE);
 
 	if (conv)
 		g_free (conv);
+}
+
+void
+PrintText (session *sess, char *text)
+{
+	PrintTextTimeStamp (sess, text, 0);
 }
 
 void
@@ -901,6 +938,20 @@ PrintTextf (session *sess, char *format, ...)
 	va_end (args);
 
 	PrintText (sess, buf);
+	g_free (buf);
+}
+
+void
+PrintTextTimeStampf (session *sess, time_t timestamp, char *format, ...)
+{
+	va_list args;
+	char *buf;
+
+	va_start (args, format);
+	buf = g_strdup_vprintf (format, args);
+	va_end (args);
+
+	PrintTextTimeStamp (sess, buf, timestamp);
 	g_free (buf);
 }
 
@@ -982,6 +1033,7 @@ static char * const pevt_join_help[] = {
 	N_("The nick of the joining person"),
 	N_("The channel being joined"),
 	N_("The host of the person"),
+	N_("The account of the person"),
 };
 
 static char * const pevt_chanaction_help[] = {
@@ -1146,6 +1198,11 @@ static char * const pevt_chanban_help[] = {
 	N_("The ban mask"),
 };
 
+static char * const pevt_chanquiet_help[] = {
+	N_("The nick of the person who did the quieting"),
+	N_("The quiet mask"),
+};
+
 static char * const pevt_chanrmkey_help[] = {
 	N_("The nick who removed the key"),
 };
@@ -1171,6 +1228,11 @@ static char * const pevt_chandevoice_help[] = {
 static char * const pevt_chanunban_help[] = {
 	N_("The nick of the person of did the unban'ing"),
 	N_("The ban mask"),
+};
+
+static char * const pevt_chanunquiet_help[] = {
+	N_("The nick of the person of did the unquiet'ing"),
+	N_("The quiet mask"),
 };
 
 static char * const pevt_chanexempt_help[] = {
@@ -1261,7 +1323,8 @@ static char * const pevt_generic_channel_help[] = {
 };
 
 static char * const pevt_saslauth_help[] = {
-	N_("Username")
+	N_("Username"),
+	N_("Mechanism")
 };
 
 static char * const pevt_saslresponse_help[] = {
@@ -1321,6 +1384,11 @@ static char * const pevt_generic_nick_help[] = {
 static char * const pevt_chanmodes_help[] = {
 	N_("Channel Name"),
 	N_("Modes string"),
+};
+
+static char * const pevt_chanurl_help[] = {
+	N_("Channel Name"),
+	N_("URL"),
 };
 
 static char * const pevt_rawmodes_help[] = {
@@ -1425,6 +1493,11 @@ static char * const pevt_dccsendoffer_help[] = {
 static char * const pevt_dccgenericoffer_help[] = {
 	N_("DCC String"),
 	N_("Nickname"),
+};
+
+static char * const pevt_notifyaway_help[] = {
+	N_("Nickname"),
+	N_("Away Reason"),
 };
 
 static char * const pevt_notifynumber_help[] = {
@@ -1614,7 +1687,10 @@ pevent_load (char *filename)
 	if (fd == -1)
 		return 1;
 	if (fstat (fd, &st) != 0)
+	{
+		close (fd);
 		return 1;
+	}
 	ibuf = malloc (st.st_size);
 	read (fd, ibuf, st.st_size);
 	close (fd);
@@ -1815,12 +1891,13 @@ format_event (session *sess, int index, char **args, char *o, int sizeofo, unsig
 }
 
 static void
-display_event (session *sess, int event, char **args, unsigned int stripcolor_args)
+display_event (session *sess, int event, char **args, 
+					unsigned int stripcolor_args, time_t timestamp)
 {
 	char o[4096];
 	format_event (sess, event, args, o, sizeof (o), stripcolor_args);
 	if (o[0])
-		PrintText (sess, o);
+		PrintTextTimeStamp (sess, o, timestamp);
 }
 
 int
@@ -2002,7 +2079,7 @@ pevt_build_string (const char *input, char **output, int *max_arg)
 
 /* black n white(0/1) are bad colors for nicks, and we'll use color 2 for us */
 /* also light/dark gray (14/15) */
-/* 5,7,8 are all shades of yellow which happen to look dman near the same */
+/* 5,7,8 are all shades of yellow which happen to look damn near the same */
 
 static char rcolors[] = { 19, 20, 22, 24, 25, 26, 27, 28, 29 };
 
@@ -2021,11 +2098,12 @@ text_color_of (char *name)
 /* called by EMIT_SIGNAL macro */
 
 void
-text_emit (int index, session *sess, char *a, char *b, char *c, char *d)
+text_emit (int index, session *sess, char *a, char *b, char *c, char *d,
+			  time_t timestamp)
 {
 	char *word[PDIWORDS];
 	int i;
-	unsigned int stripcolor_args = (prefs.hex_text_stripcolor_msg ? 0xFFFFFFFF : 0);
+	unsigned int stripcolor_args = (chanopt_is_set (prefs.hex_text_stripcolor_msg, sess->text_strip) ? 0xFFFFFFFF : 0);
 	char tbuf[NICKLEN + 4];
 
 	if (prefs.hex_text_color_nicks && (index == XP_TE_CHANACTION || index == XP_TE_CHANMSG))
@@ -2043,7 +2121,7 @@ text_emit (int index, session *sess, char *a, char *b, char *c, char *d)
 	for (i = 5; i < PDIWORDS; i++)
 		word[i] = "\000";
 
-	if (plugin_emit_print (sess, word))
+	if (plugin_emit_print (sess, word, timestamp))
 		return;
 
 	/* If a plugin's callback executes "/close", 'sess' may be invalid */
@@ -2066,9 +2144,9 @@ text_emit (int index, session *sess, char *a, char *b, char *c, char *d)
 	case XP_TE_DPRIVMSG:
 	case XP_TE_PRIVACTION:
 	case XP_TE_DPRIVACTION:
-		if (chanopt_is_set_a (prefs.hex_input_beep_priv, sess->alert_beep) && (!prefs.hex_away_omit_alerts || !sess->server->is_away))
+		if (chanopt_is_set (prefs.hex_input_beep_priv, sess->alert_beep) && (!prefs.hex_away_omit_alerts || !sess->server->is_away))
 			sound_beep (sess);
-		if (chanopt_is_set_a (prefs.hex_input_flash_priv, sess->alert_taskbar) && (!prefs.hex_away_omit_alerts || !sess->server->is_away))
+		if (chanopt_is_set (prefs.hex_input_flash_priv, sess->alert_taskbar) && (!prefs.hex_away_omit_alerts || !sess->server->is_away))
 			fe_flash_window (sess);
 		/* why is this one different? because of plugin-tray.c's hooks! ugly */
 		if (sess->alert_tray == SET_ON)
@@ -2078,9 +2156,9 @@ text_emit (int index, session *sess, char *a, char *b, char *c, char *d)
 	/* ===Highlighted message=== */
 	case XP_TE_HCHANACTION:
 	case XP_TE_HCHANMSG:
-		if (chanopt_is_set_a (prefs.hex_input_beep_hilight, sess->alert_beep) && (!prefs.hex_away_omit_alerts || !sess->server->is_away))
+		if (chanopt_is_set (prefs.hex_input_beep_hilight, sess->alert_beep) && (!prefs.hex_away_omit_alerts || !sess->server->is_away))
 			sound_beep (sess);
-		if (chanopt_is_set_a (prefs.hex_input_flash_hilight, sess->alert_taskbar) && (!prefs.hex_away_omit_alerts || !sess->server->is_away))
+		if (chanopt_is_set (prefs.hex_input_flash_hilight, sess->alert_taskbar) && (!prefs.hex_away_omit_alerts || !sess->server->is_away))
 			fe_flash_window (sess);
 		if (sess->alert_tray == SET_ON)
 			fe_tray_set_icon (FE_ICON_MESSAGE);
@@ -2089,9 +2167,9 @@ text_emit (int index, session *sess, char *a, char *b, char *c, char *d)
 	/* ===Channel message=== */
 	case XP_TE_CHANACTION:
 	case XP_TE_CHANMSG:
-		if (chanopt_is_set_a (prefs.hex_input_beep_chans, sess->alert_beep) && (!prefs.hex_away_omit_alerts || !sess->server->is_away))
+		if (chanopt_is_set (prefs.hex_input_beep_chans, sess->alert_beep) && (!prefs.hex_away_omit_alerts || !sess->server->is_away))
 			sound_beep (sess);
-		if (chanopt_is_set_a (prefs.hex_input_flash_chans, sess->alert_taskbar) && (!prefs.hex_away_omit_alerts || !sess->server->is_away))
+		if (chanopt_is_set (prefs.hex_input_flash_chans, sess->alert_taskbar) && (!prefs.hex_away_omit_alerts || !sess->server->is_away))
 			fe_flash_window (sess);
 		if (sess->alert_tray == SET_ON)
 			fe_tray_set_icon (FE_ICON_MESSAGE);
@@ -2099,7 +2177,7 @@ text_emit (int index, session *sess, char *a, char *b, char *c, char *d)
 	}
 
 	sound_play_event (index);
-	display_event (sess, index, word, stripcolor_args);
+	display_event (sess, index, word, stripcolor_args, timestamp);
 }
 
 char *
@@ -2115,14 +2193,15 @@ text_find_format_string (char *name)
 }
 
 int
-text_emit_by_name (char *name, session *sess, char *a, char *b, char *c, char *d)
+text_emit_by_name (char *name, session *sess, time_t timestamp,
+				   char *a, char *b, char *c, char *d)
 {
 	int i = 0;
 
 	i = pevent_find (name, &i);
 	if (i >= 0)
 	{
-		text_emit (i, sess, a, b, c, d);
+		text_emit (i, sess, a, b, c, d, timestamp);
 		return 1;
 	}
 
@@ -2173,34 +2252,15 @@ char *sound_files[NUM_XP];
 void
 sound_beep (session *sess)
 {
-	if (sound_files[XP_TE_BEEP] && sound_files[XP_TE_BEEP][0])
-		/* user defined beep _file_ */
-		sound_play_event (XP_TE_BEEP);
-	else
-		/* system beep */
-		fe_beep (sess);
-}
-
-static char *
-sound_find_command (void)
-{
-	/* some sensible unix players. You're bound to have one of them */
-	static const char * const progs[] = {"aplay", "esdplay", "soxplay", "artsplay", NULL};
-	char *cmd;
-	int i = 0;
-
-	if (prefs.hex_sound_command[0])
-		return g_strdup (prefs.hex_sound_command);
-
-	while (progs[i])
+	if (!prefs.hex_gui_focus_omitalerts || !fe_gui_info (sess, 0) == 1)
 	{
-		cmd = g_find_program_in_path (progs[i]);
-		if (cmd)
-			return cmd;
-		i++;
+		if (sound_files[XP_TE_BEEP] && sound_files[XP_TE_BEEP][0])
+			/* user defined beep _file_ */
+			sound_play_event (XP_TE_BEEP);
+		else
+			/* system beep */
+			fe_beep (sess);
 	}
-
-	return NULL;
 }
 
 void
@@ -2208,15 +2268,15 @@ sound_play (const char *file, gboolean quiet)
 {
 	char *buf;
 	char *wavfile;
+#ifndef WIN32
 	char *cmd;
-#if 0
-	LPSTR lpRes;
-	HANDLE hResInfo, hRes;
 #endif
 
 	/* the pevents GUI editor triggers this after removing a soundfile */
 	if (!file[0])
+	{
 		return;
+	}
 
 #ifdef WIN32
 	/* check for fullpath */
@@ -2229,53 +2289,38 @@ sound_play (const char *file, gboolean quiet)
 	}
 	else
 	{
-		wavfile = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "%s", prefs.hex_sound_dir, file);
+		wavfile = g_build_filename (get_xdir (), HEXCHAT_SOUND_DIR, file, NULL);
 	}
 
 	if (g_access (wavfile, R_OK) == 0)
 	{
-		cmd = sound_find_command ();
-
 #ifdef WIN32
-		if (cmd == NULL || strcmp (cmd, "esdplay") == 0)
+		PlaySound (wavfile, NULL, SND_NODEFAULT|SND_FILENAME|SND_ASYNC);
+#else
+#ifdef USE_LIBCANBERRA
+		if (ca_con == NULL)
 		{
-			PlaySound (wavfile, NULL, SND_NODEFAULT|SND_FILENAME|SND_ASYNC);
-#if 0			/* this would require the wav file to be added to the executable as resource */
-			hResInfo = FindResource (NULL, file_fs, "WAVE");
-			if (hResInfo != NULL)
-			{
-				/* load the WAVE resource */
-				hRes = LoadResource (NULL, hResInfo);
-				if (hRes != NULL)
-				{
-					/* lock the WAVE resource and play it */
-					lpRes = LockResource(hRes);
-					if (lpRes != NULL)
-					{
-						sndPlaySound (lpRes, SND_MEMORY | SND_NODEFAULT | SND_FILENAME | SND_ASYNC);
-						UnlockResource (hRes);
-					}
-
-					/* free the WAVE resource */
-					FreeResource (hRes);
-				}
-			}
-#endif
+			ca_context_create (&ca_con);
+			ca_context_change_props (ca_con,
+											CA_PROP_APPLICATION_ID, "hexchat",
+											CA_PROP_APPLICATION_NAME, "HexChat",
+											CA_PROP_APPLICATION_ICON_NAME, "hexchat", NULL);
 		}
-		else
+
+		if (ca_context_play (ca_con, 0, CA_PROP_MEDIA_FILENAME, wavfile, NULL) != 0)
 #endif
 		{
+			cmd = g_find_program_in_path ("play");
+	
 			if (cmd)
 			{
 				buf = g_strdup_printf ("%s \"%s\"", cmd, wavfile);
 				hexchat_exec (buf);
 				g_free (buf);
+				g_free (cmd);
 			}
 		}
-
-		if (cmd)
-			g_free (cmd);
-
+#endif
 	}
 	else
 	{
@@ -2294,7 +2339,9 @@ void
 sound_play_event (int i)
 {
 	if (sound_files[i])
+	{
 		sound_play (sound_files[i], FALSE);
+	}
 }
 
 static void

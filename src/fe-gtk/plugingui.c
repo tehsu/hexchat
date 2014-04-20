@@ -22,17 +22,6 @@
 
 #include "fe-gtk.h"
 
-#include <gtk/gtkdialog.h>
-#include <gtk/gtkstock.h>
-#include <gtk/gtkbox.h>
-#include <gtk/gtkhbbox.h>
-#include <gtk/gtkscrolledwindow.h>
-
-#include <gtk/gtkliststore.h>
-#include <gtk/gtktreeview.h>
-#include <gtk/gtktreeselection.h>
-#include <gtk/gtkcellrenderertext.h>
-
 #include "../common/hexchat.h"
 #define PLUGIN_C
 typedef struct session hexchat_context;
@@ -81,6 +70,31 @@ plugingui_treeview_new (GtkWidget *box)
 			gtk_tree_view_column_set_alignment (col, 0.5);
 
 	return view;
+}
+
+static char *
+plugingui_getfilename (GtkTreeView *view)
+{
+	GtkTreeModel *model;
+	GtkTreeSelection *sel;
+	GtkTreeIter iter;
+	GValue file;
+	char *str;
+
+	memset (&file, 0, sizeof (file));
+
+	sel = gtk_tree_view_get_selection (view);
+	if (gtk_tree_selection_get_selected (sel, &model, &iter))
+	{
+		gtk_tree_model_get_value (model, &iter, FILE_COLUMN, &file);
+
+		str = g_value_dup_string (&file);
+		g_value_unset (&file);
+
+		return str;
+	}
+
+	return NULL;
 }
 
 static void
@@ -144,13 +158,13 @@ plugingui_load (void)
 {
 	char *sub_dir;
 
-	sub_dir = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "addons", get_xdir());
+	sub_dir = g_build_filename (get_xdir(), "addons", NULL);
 
 	gtkutil_file_req (_("Select a Plugin or Script to load"), plugingui_load_cb, current_sess,
 #ifdef WIN32
-							sub_dir, "*.dll;*.lua;*.pl;*.py;*.tcl", FRF_ADDFOLDER|FRF_FILTERISINITIAL|FRF_EXTENSIONS);
+							sub_dir, "*.dll;*.lua;*.pl;*.py;*.tcl;*.js", FRF_FILTERISINITIAL|FRF_EXTENSIONS);
 #else
-							sub_dir, "*.so;*.lua;*.pl;*.py;*.tcl", FRF_ADDFOLDER|FRF_FILTERISINITIAL|FRF_EXTENSIONS);
+							sub_dir, "*.so;*.lua;*.pl;*.py;*.tcl;*.js", FRF_FILTERISINITIAL|FRF_EXTENSIONS);
 #endif
 
 	g_free (sub_dir);
@@ -204,6 +218,25 @@ plugingui_unload (GtkWidget * wid, gpointer unused)
 	g_free (file);
 }
 
+static void
+plugingui_reloadbutton_cb (GtkWidget *wid, GtkTreeView *view)
+{
+	char *file = plugingui_getfilename(view);
+
+	if (file)
+	{
+		char *buf = malloc (strlen (file) + 9);
+
+		if (strchr (file, ' '))
+			sprintf (buf, "RELOAD \"%s\"", file);
+		else
+			sprintf (buf, "RELOAD %s", file);
+		handle_command (current_sess, buf, FALSE);
+		free (buf);
+		g_free (file);
+	}
+}
+
 void
 plugingui_open (void)
 {
@@ -234,7 +267,10 @@ plugingui_open (void)
 	                plugingui_loadbutton_cb, NULL, _("_Load..."));
 
 	gtkutil_button (hbox, GTK_STOCK_DELETE, NULL,
-	                plugingui_unload, NULL, _("_UnLoad"));
+	                plugingui_unload, NULL, _("_Unload"));
+
+	gtkutil_button (hbox, GTK_STOCK_REFRESH, NULL,
+	                plugingui_reloadbutton_cb, view, _("_Reload"));
 
 	fe_pluginlist_update ();
 
